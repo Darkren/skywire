@@ -351,7 +351,7 @@ func randRulesMap(pks []cipher.PubKey) RulesMap {
 
 func randIntermediaryRules(n int) []routing.Rule {
 	const keepAlive = time.Second
-	randRtID := func() routing.RouteID { return routing.RouteID(rand.Uint32()) } // nolint:gosec
+	randRtID := func() routing.RouteID { return routing.RouteID(rand.Uint32()) }
 
 	out := make([]routing.Rule, n)
 	for i := range out {

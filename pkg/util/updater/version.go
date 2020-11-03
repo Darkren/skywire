@@ -2,7 +2,6 @@ package updater
 
 import (
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -64,11 +63,6 @@ func (v *Version) String() string {
 	}
 
 	return version
-}
-
-// ReleaseURL returns GitHub release URL for this version.
-func (v *Version) ReleaseURL() string {
-	return fmt.Sprintf("%s/tag/%s", releaseURL, v.String())
 }
 
 // VersionFromString parses a Version from a string.

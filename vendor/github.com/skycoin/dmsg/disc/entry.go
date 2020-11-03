@@ -13,7 +13,7 @@ import (
 const (
 	currentVersion             = "0.0.1"
 	entryLifetime              = 1 * time.Minute
-	allowedEntryTimestampError = 5 * time.Second
+	allowedEntryTimestampError = 100 * time.Millisecond
 )
 
 var (
@@ -271,11 +271,7 @@ func (e *Entry) Validate() error {
 
 	if ts.After(latestAcceptable) || ts.Before(earliestAcceptable) {
 		log.Warnf("Entry timestamp %v is not correct (now: %v)", ts, now)
-		// Skybian boards have issues with mismatching time because of https://github.com/skycoin/skybian/issues/47.
-		// This causes issues like https://github.com/SkycoinPro/skywire-services/issues/274.
-		// Therefore, the timestamp check needs to be temporarily disabled until the issue is resolved.
-		//
-		// return ErrValidationOutdatedTime
+		return ErrValidationOutdatedTime
 	}
 
 	return nil

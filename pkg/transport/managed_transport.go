@@ -43,16 +43,6 @@ const (
 	tpFactor = 1.3
 )
 
-// ManagedTransportConfig is a configuration for managed transport.
-type ManagedTransportConfig struct {
-	Net         *snet.Network
-	DC          DiscoveryClient
-	LS          LogStore
-	RemotePK    cipher.PubKey
-	NetName     string
-	AfterClosed TPCloseCallback
-}
-
 // ManagedTransport manages a direct line of communication between two visor nodes.
 // There is a single underlying connection between two edges.
 // Initial dialing can be requested by either edge of the connection.
@@ -84,27 +74,21 @@ type ManagedTransport struct {
 	done chan struct{}
 	once sync.Once
 	wg   sync.WaitGroup
-
-	remoteAddr string
-
-	afterClosedMu sync.RWMutex
-	afterClosed   TPCloseCallback
 }
 
 // NewManagedTransport creates a new ManagedTransport.
-func NewManagedTransport(conf ManagedTransportConfig) *ManagedTransport {
+func NewManagedTransport(n *snet.Network, dc DiscoveryClient, ls LogStore, rPK cipher.PubKey, netName string) *ManagedTransport {
 	mt := &ManagedTransport{
-		log:         logging.MustGetLogger(fmt.Sprintf("tp:%s", conf.RemotePK.String()[:6])),
-		rPK:         conf.RemotePK,
-		netName:     conf.NetName,
-		n:           conf.Net,
-		dc:          conf.DC,
-		ls:          conf.LS,
-		Entry:       makeEntry(conf.Net.LocalPK(), conf.RemotePK, conf.NetName),
-		LogEntry:    new(LogEntry),
-		connCh:      make(chan struct{}, 1),
-		done:        make(chan struct{}),
-		afterClosed: conf.AfterClosed,
+		log:      logging.MustGetLogger(fmt.Sprintf("tp:%s", rPK.String()[:6])),
+		rPK:      rPK,
+		netName:  netName,
+		n:        n,
+		dc:       dc,
+		ls:       ls,
+		Entry:    makeEntry(n.LocalPK(), rPK, netName),
+		LogEntry: new(LogEntry),
+		connCh:   make(chan struct{}, 1),
+		done:     make(chan struct{}),
 	}
 	mt.wg.Add(2)
 	return mt
@@ -144,7 +128,9 @@ func (mt *ManagedTransport) Serve(readCh chan<- routing.Packet) {
 		}
 
 		// End connection.
+		mt.log.Info("IN_TRANSPORT Serve LOCKING")
 		mt.connMx.Lock()
+		mt.log.Info("IN_TRANSPORT Serve LOCKED")
 		close(mt.connCh)
 		if mt.conn != nil {
 			if err := mt.conn.Close(); err != nil {
@@ -153,6 +139,7 @@ func (mt *ManagedTransport) Serve(readCh chan<- routing.Packet) {
 			mt.conn = nil
 		}
 		mt.connMx.Unlock()
+		mt.log.Info("IN_TRANSPORT Serve UNLOCKED")
 
 		log.WithField("remaining_tps", atomic.AddInt32(&mTpCount, -1)).
 			Info("Stopped serving.")
@@ -173,9 +160,12 @@ func (mt *ManagedTransport) Serve(readCh chan<- routing.Packet) {
 					mt.log.WithError(err).Debug("Failed to read packet. Returning...")
 					return
 				}
+				mt.log.Info("IN_TRANSPORT Serve LOCKING AGAIN")
 				mt.connMx.Lock()
+				mt.log.Info("IN_TRANSPORT Serve LOCKED AGAIN")
 				mt.clearConn()
 				mt.connMx.Unlock()
+				mt.log.Info("IN_TRANSPORT Serve UNLOCKED AGAIN")
 				log.WithError(err).Warn("Failed to read packet.")
 				continue
 			}
@@ -217,12 +207,6 @@ func (mt *ManagedTransport) Serve(readCh chan<- routing.Packet) {
 	}
 }
 
-func (mt *ManagedTransport) onAfterClosed(f TPCloseCallback) {
-	mt.afterClosedMu.Lock()
-	mt.afterClosed = f
-	mt.afterClosedMu.Unlock()
-}
-
 func (mt *ManagedTransport) isServing() bool {
 	select {
 	case <-mt.done:
@@ -246,21 +230,9 @@ func (mt *ManagedTransport) Close() (err error) {
 	return err
 }
 
-func (mt *ManagedTransport) close() {
-	mt.disconnect()
-
-	mt.afterClosedMu.RLock()
-	afterClosed := mt.afterClosed
-	mt.afterClosedMu.RUnlock()
-
-	if afterClosed != nil {
-		afterClosed(mt.netName, mt.remoteAddr)
-	}
-}
-
-// disconnect stops serving the transport and ensures that transport status is updated to DOWN.
+// close stops serving the transport and ensures that transport status is updated to DOWN.
 // It also waits until mt.Serve returns if specified.
-func (mt *ManagedTransport) disconnect() {
+func (mt *ManagedTransport) close() {
 	mt.once.Do(func() { close(mt.done) })
 	_ = mt.updateStatus(false, 1) //nolint:errcheck
 }
@@ -297,8 +269,13 @@ func (mt *ManagedTransport) Accept(ctx context.Context, conn *snet.Conn) error {
 
 // Dial dials a new underlying connection.
 func (mt *ManagedTransport) Dial(ctx context.Context) error {
+	mt.log.Info("IN_TRANSPORT Dial LOCKING")
 	mt.connMx.Lock()
-	defer mt.connMx.Unlock()
+	defer func() {
+		mt.connMx.Unlock()
+		mt.log.Info("IN_TRANSPORT Dial UNLOCKED")
+	}()
+	mt.log.Info("IN_TRANSPORT Dial LOCKED")
 
 	if !mt.isServing() {
 		return ErrNotServing
@@ -334,19 +311,25 @@ func (mt *ManagedTransport) dial(ctx context.Context) error {
 // The 'retry' output specifies whether we can retry dial on failure.
 func (mt *ManagedTransport) redial(ctx context.Context) error {
 	if !mt.isServing() {
+		mt.log.Info("IN_TRANSPORT redial NOT SERVING")
 		return ErrNotServing
 	}
 
+	mt.log.Info("IN_TRANSPORT redial SERVING")
+
 	if _, err := mt.dc.GetTransportByID(ctx, mt.Entry.ID); err != nil {
+		mt.log.Info("IN_TRANSPORT redial FAILED TO GET TRANSPORT")
 		// If the error is a temporary network error, we should retry at a later stage.
 		if netErr, ok := err.(net.Error); ok && netErr.Temporary() {
-
+			mt.log.Info("IN_TRANSPORT redial FAILED TO GET TRANSPORT, RETURNING")
 			return err
 		}
 
 		// If the error is not temporary, it most likely means that the transport is no longer registered.
 		// Hence, we should close the managed transport.
-		mt.disconnect()
+		mt.log.Info("IN_TRANSPORT redial CLOSING MT")
+		mt.close()
+		mt.log.Info("IN_TRANSPORT redial CLOSED MT")
 		mt.log.
 			WithError(err).
 			Warn("Transport closed due to redial failure. Transport is likely no longer in discovery.")
@@ -354,6 +337,7 @@ func (mt *ManagedTransport) redial(ctx context.Context) error {
 		return ErrNotServing
 	}
 
+	mt.log.Info("IN_TRANSPORT redial DIALING")
 	return mt.dial(ctx)
 }
 
@@ -371,11 +355,14 @@ func (mt *ManagedTransport) redialLoop(ctx context.Context) error {
 
 	// Only redial when there is no underlying conn.
 	return retry.Do(ctx, func() (err error) {
+		mt.log.Info("IN_TRANSPORT redialLoop LOCKING")
 		mt.connMx.Lock()
+		mt.log.Info("IN_TRANSPORT redialLoop LOCKED")
 		if mt.conn == nil {
 			err = mt.redial(ctx)
 		}
 		mt.connMx.Unlock()
+		mt.log.Info("IN_TRANSPORT redialLoop UNLOCKED")
 		return err
 	})
 }
@@ -393,9 +380,12 @@ func (mt *ManagedTransport) getConn() *snet.Conn {
 		return nil
 	}
 
+	mt.log.Info("IN_TRANSPORT getConn LOCKING")
 	mt.connMx.Lock()
+	mt.log.Info("IN_TRANSPORT getConn LOCKED")
 	conn := mt.conn
 	mt.connMx.Unlock()
+	mt.log.Info("IN_TRANSPORT getConn UNLOCKED")
 	return conn
 }
 
@@ -532,11 +522,15 @@ func statusString(isUp bool) string {
 
 // WritePacket writes a packet to the remote.
 func (mt *ManagedTransport) WritePacket(ctx context.Context, packet routing.Packet) error {
+	mt.log.Info("IN_TRANSPORT WritePacket LOCKING")
 	mt.connMx.Lock()
-	defer mt.connMx.Unlock()
+	mt.log.Info("IN_TRANSPORT WritePacket LOCKED")
 
 	if mt.conn == nil {
+		mt.log.Info("IN_TRANSPORT WritePacket CONN IS NIL, REDIALING")
 		if err := mt.redial(ctx); err != nil {
+			mt.connMx.Unlock()
+			mt.log.Info("IN_TRANSPORT WritePacket UNLOCKED ON REDIAL ERROR")
 
 			// TODO(evanlinjin): Determine whether we need to call 'mt.wg.Wait()' here.
 			if err == ErrNotServing {
@@ -546,6 +540,11 @@ func (mt *ManagedTransport) WritePacket(ctx context.Context, packet routing.Pack
 			return fmt.Errorf("failed to redial underlying connection: %w", err)
 		}
 	}
+
+	defer func() {
+		mt.connMx.Unlock()
+		mt.log.Info("IN_TRANSPORT WritePacket UNLOCKED IN DEFER")
+	}()
 
 	n, err := mt.conn.Write(packet)
 	if err != nil {

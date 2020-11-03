@@ -18,9 +18,19 @@
 - `hypervisor` (*[Config](#Config))
 
 
-# V1UptimeTracker
+# V1Routing
 
-- `addr` (string)
+- `setup_nodes` ()
+- `route_finder` (string)
+- `route_finder_timeout` (Duration)
+
+
+# V1Dmsgpty
+
+- `port` (uint16)
+- `authorization_file` (string)
+- `cli_network` (string)
+- `cli_address` (string)
 
 
 # V1Transport
@@ -29,6 +39,12 @@
 - `address_resolver` (string)
 - `log_store` (*[V1LogStore](#V1LogStore))
 - `trusted_visors` ()
+
+
+# V1LogStore
+
+- `type` (string) - Type defines the log store type. Valid values: file, memory.
+- `location` (string)
 
 
 # V1Launcher
@@ -40,31 +56,15 @@
 - `local_path` (string)
 
 
+# V1UptimeTracker
+
+- `addr` (string)
+
+
 # V1AppDisc
 
 - `update_interval` (Duration)
 - `proxy_discovery_addr` (string)
-
-
-# V1LogStore
-
-- `type` (string) - Type defines the log store type. Valid values: file, memory.
-- `location` (string)
-
-
-# V1Dmsgpty
-
-- `port` (uint16)
-- `authorization_file` (string)
-- `cli_network` (string)
-- `cli_address` (string)
-
-
-# V1Routing
-
-- `setup_nodes` ()
-- `route_finder` (string)
-- `route_finder_timeout` (Duration)
 
 
 # Common
@@ -74,6 +74,35 @@
 - `version` (string)
 - `sk` (SecKey)
 - `pk` (PubKey)
+
+
+# RWMutex
+
+- `w` ([Mutex](#Mutex))
+- `writerSem` (uint32)
+- `readerSem` (uint32)
+- `readerCount` (int32)
+- `readerWait` (int32)
+
+
+# Mutex
+
+- `state` (int32)
+- `sema` (uint32)
+
+
+# STCPConfig
+
+- `pk_table` ()
+- `local_address` (string)
+
+
+# AppConfig
+
+- `name` (string)
+- `args` ([]string)
+- `auto_start` (bool)
+- `port` (Port)
 
 
 # DmsgConfig
@@ -107,27 +136,6 @@
 - `-` (bool)
 
 
-# RWMutex
-
-- `w` ([Mutex](#Mutex))
-- `writerSem` (uint32)
-- `readerSem` (uint32)
-- `readerCount` (int32)
-- `readerWait` (int32)
-
-
-# Mutex
-
-- `state` (int32)
-- `sema` (uint32)
-
-
-# STCPConfig
-
-- `pk_table` ()
-- `local_address` (string)
-
-
 # MasterLogger
 
 - `` (*[Logger](#Logger))
@@ -136,11 +144,3 @@
 # Logger
 
 - `` (FieldLogger)
-
-
-# AppConfig
-
-- `name` (string)
-- `args` ([]string)
-- `auto_start` (bool)
-- `port` (Port)

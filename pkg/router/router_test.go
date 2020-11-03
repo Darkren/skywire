@@ -200,11 +200,11 @@ func Test_router_NoiseRouteGroups(t *testing.T) {
 	nrg1Ifc := <-nrg1IfcCh
 	require.NotNil(t, nrg1Ifc)
 
-	nrg0, ok := nrg0Ifc.(*NoiseRouteGroup)
+	nrg0, ok := nrg0Ifc.(*noiseRouteGroup)
 	require.True(t, ok)
 	require.NotNil(t, nrg0)
 
-	nrg1, ok := nrg1Ifc.(*NoiseRouteGroup)
+	nrg1, ok := nrg1Ifc.(*noiseRouteGroup)
 	require.True(t, ok)
 	require.NotNil(t, nrg1)
 
@@ -219,19 +219,12 @@ func Test_router_NoiseRouteGroups(t *testing.T) {
 	require.Equal(t, len(data), n)
 	require.Equal(t, data, received[:n])
 
-	require.True(t, nrg0.IsAlive())
-	require.True(t, nrg1.IsAlive())
-
 	err = nrg0.Close()
 	require.NoError(t, err)
-
-	require.False(t, nrg0.IsAlive())
-	require.False(t, nrg1.IsAlive())
 
 	require.True(t, nrg1.rg.isRemoteClosed())
 	err = nrg1.Close()
 	require.NoError(t, err)
-	require.False(t, nrg1.IsAlive())
 }
 
 func TestRouter_Serve(t *testing.T) {
@@ -373,10 +366,10 @@ func testKeepAlivePacket(t *testing.T, r0, r1 *router, pk1, pk2 cipher.PubKey) {
 	require.NoError(t, r0.handleTransportPacket(context.TODO(), packet))
 
 	require.Len(t, r0.rt.AllRules(), 1)
-	time.Sleep(40 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 	require.Len(t, r0.rt.AllRules(), 1)
 
-	time.Sleep(110 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	require.Len(t, r0.rt.AllRules(), 0)
 }
 
@@ -417,7 +410,7 @@ func testClosePacketRemote(t *testing.T, r0, r1 *router, pk1, pk2 cipher.PubKey,
 	rg1 := NewRouteGroup(DefaultRouteGroupConfig(), r1.rt, rules.Desc)
 	rg1.appendRules(rules.Forward, rules.Reverse, r1.tm.Transport(rules.Forward.NextTransportID()))
 
-	nrg1 := &NoiseRouteGroup{rg: rg1}
+	nrg1 := &noiseRouteGroup{rg: rg1}
 	r1.rgsNs[rg1.desc] = nrg1
 
 	packet := routing.MakeClosePacket(intFwdID[0], routing.CloseRequested)
@@ -478,7 +471,7 @@ func testClosePacketInitiator(t *testing.T, r0, r1 *router, pk1, pk2 cipher.PubK
 	rg1 := NewRouteGroup(DefaultRouteGroupConfig(), r1.rt, rules.Desc)
 	rg1.appendRules(rules.Forward, rules.Reverse, r1.tm.Transport(rules.Forward.NextTransportID()))
 
-	nrg1 := &NoiseRouteGroup{rg: rg1}
+	nrg1 := &noiseRouteGroup{rg: rg1}
 	r1.rgsNs[rg1.desc] = nrg1
 
 	packet := routing.MakeClosePacket(intFwdID[0], routing.CloseRequested)
@@ -525,7 +518,7 @@ func testForwardRule(t *testing.T, r0, r1 *router, tp1 *transport.ManagedTranspo
 	rg0 := NewRouteGroup(DefaultRouteGroupConfig(), r0.rt, rules.Desc)
 	rg0.appendRules(rules.Forward, rules.Reverse, r0.tm.Transport(rules.Forward.NextTransportID()))
 
-	nrg0 := &NoiseRouteGroup{rg: rg0}
+	nrg0 := &noiseRouteGroup{rg: rg0}
 	r0.rgsNs[rg0.desc] = nrg0
 
 	// Call handleTransportPacket for r0 (this should in turn, use the rule we added).
@@ -604,7 +597,7 @@ func testConsumeRule(t *testing.T, r0, r1 *router, tp1 *transport.ManagedTranspo
 	rg1 := NewRouteGroup(DefaultRouteGroupConfig(), r1.rt, rules.Desc)
 	rg1.appendRules(rules.Forward, rules.Reverse, r1.tm.Transport(rules.Forward.NextTransportID()))
 
-	nrg1 := &NoiseRouteGroup{rg: rg1}
+	nrg1 := &noiseRouteGroup{rg: rg1}
 	r1.rgsNs[rg1.desc] = nrg1
 
 	packet, err := routing.MakeDataPacket(intFwdRtID[0], []byte("test intermediary forward"))
@@ -750,7 +743,7 @@ func TestRouter_SetupIsTrusted(t *testing.T) {
 
 func clearRouteGroups(routers ...*router) {
 	for _, r := range routers {
-		r.rgsNs = make(map[routing.RouteDescriptor]*NoiseRouteGroup)
+		r.rgsNs = make(map[routing.RouteDescriptor]*noiseRouteGroup)
 	}
 }
 
@@ -786,6 +779,8 @@ func NewTestEnv(t *testing.T, nets []*snet.Network) *TestEnv {
 	ms := make([]*transport.Manager, len(nets))
 
 	for i, n := range nets {
+		var err error
+
 		mConfs[i] = &transport.ManagerConfig{
 			PubKey:          n.LocalPK(),
 			SecKey:          n.LocalSK(),
@@ -793,7 +788,8 @@ func NewTestEnv(t *testing.T, nets []*snet.Network) *TestEnv {
 			LogStore:        transport.InMemoryTransportLogStore(),
 		}
 
-		ms[i] = transport.NewManager(nil, n, mConfs[i])
+		ms[i], err = transport.NewManager(nil, n, mConfs[i])
+		require.NoError(t, err)
 
 		go ms[i].Serve(context.TODO())
 	}

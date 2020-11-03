@@ -54,9 +54,7 @@ func (c *httpClient) Entry(ctx context.Context, publicKey cipher.PubKey) (*Entry
 	if err != nil {
 		return nil, err
 	}
-
 	addKeepAlive(req)
-
 	req = req.WithContext(ctx)
 
 	resp, err := c.client.Do(req)
@@ -103,16 +101,10 @@ func (c *httpClient) PostEntry(ctx context.Context, e *Entry) error {
 	if err != nil {
 		return err
 	}
-
 	addKeepAlive(req)
-	req.Header.Set("Content-Type", "application/json")
-
-	// Since v0.3.0 visors send ?timeout=true, before v0.3.0 do not.
-	q := req.URL.Query()
-	q.Add("timeout", "true")
-	req.URL.RawQuery = q.Encode()
-
 	req = req.WithContext(ctx)
+
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.client.Do(req)
 	if resp != nil {

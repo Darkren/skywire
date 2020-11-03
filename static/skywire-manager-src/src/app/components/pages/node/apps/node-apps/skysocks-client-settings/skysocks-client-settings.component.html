@@ -21,22 +21,6 @@
             {{ 'apps.vpn-socks-client-settings.remote-key-chars-error' | translate }}
           </ng-template>
         </mat-form-field>
-
-        <mat-form-field *ngIf="configuringVpn">
-          <input
-            id="password"
-            type="password"
-            formControlName="password"
-            maxlength="100"
-            [placeholder]="'apps.vpn-socks-client-settings.password' | translate"
-            matInput
-          >
-        </mat-form-field>
-
-        <div class="password-history-warning" *ngIf="form && form.get('password').value">
-          <mat-icon [inline]="true">warning</mat-icon>
-          {{ 'apps.vpn-socks-client-settings.password-history-warning' | translate }}
-        </div>
     
         <app-button
           #button
@@ -91,12 +75,11 @@
         </div>
 
         <!-- Proxies list. -->
-        <div *ngFor="let proxy of proxiesFromDiscoveryToShow" class="d-flex">
-          <!-- Server button. -->
+        <ng-container *ngFor="let proxy of proxiesFromDiscoveryToShow">
           <button
             mat-button
             class="list-button grey-button-background w-100"
-            (click)="saveChanges(proxy.pk, null, false, proxy.location)"
+            (click)="saveChanges(proxy.pk, false, proxy.location)"
           >
             <div class="button-content">
               <div class="item">
@@ -120,16 +103,7 @@
               </div>
             </div>
           </button>
-          <!-- Copy button. -->
-          <button
-            mat-button
-            class="list-button grey-button-background"
-            (click)="copyPk(proxy.pk)"
-            [matTooltip]="'apps.vpn-socks-client-settings.copy-pk-info' | translate"
-          >
-            <mat-icon [inline]="true">filter_none</mat-icon>
-          </button>
-        </div>
+        </ng-container>
       </ng-container>
 
       <!-- Paginator. -->
@@ -154,30 +128,14 @@
         </div>
       </div>
 
-      <div *ngFor="let entry of history" class="d-flex">
-        <!-- Buttons for big screens. -->
+      <ng-container *ngFor="let entry of history">
+        <!-- Button for big screens. -->
         <button
           mat-button
           class="list-button grey-button-background w-100 d-none d-md-inline"
-          (click)="useFromHistory(entry)"
+          (click)="saveChanges(entry.key, entry.enteredManually, entry.location, entry.note)"
         >
           <ng-container *ngTemplateOutlet="content"></ng-container>
-        </button>
-        <button
-          mat-button
-          class="list-button grey-button-background d-none d-md-inline"
-          (click)="changeNote(entry)"
-          [matTooltip]="'apps.vpn-socks-client-settings.change-note' | translate"
-        >
-          <mat-icon [inline]="true">edit</mat-icon>
-        </button>
-        <button
-          mat-button
-          class="list-button grey-button-background d-none d-md-inline"
-          (click)="removeFromHistory(entry.key)"
-          [matTooltip]="'apps.vpn-socks-client-settings.remove-entry' | translate"
-        >
-          <mat-icon [inline]="true">close</mat-icon>
         </button>
 
         <!-- Button for small screens. -->
@@ -218,13 +176,29 @@
             </div>
             <!-- Buttons. -->
             <div class="options-container">
+              <button
+                (click)="$event.stopPropagation(); changeNote(entry)"
+                mat-icon-button
+                [matTooltip]="'apps.vpn-socks-client-settings.change-note' | translate"
+                class="small-button hard-grey-button-background d-none d-md-inline"
+              >
+                <mat-icon [inline]="true">edit</mat-icon>
+              </button>
+              <button
+                (click)="$event.stopPropagation(); removeFromHistory(entry.key)"
+                mat-icon-button
+                [matTooltip]="'apps.vpn-socks-client-settings.remove-entry' | translate"
+                class="small-button hard-grey-button-background d-none d-md-inline"
+              >
+                <mat-icon [inline]="true">close</mat-icon>
+              </button>
               <div class="small-button d-md-none">
                 <mat-icon [inline]="true">add</mat-icon>
               </div>
             </div>
           </div>
         </ng-template>
-      </div>
+      </ng-container>
     </mat-tab>
   </mat-tab-group>
 </app-dialog>

@@ -18,7 +18,6 @@ export class Node {
   health?: HealthInfo;
   dmsgServerPk?: string;
   roundTripPing?: string;
-  isHypervisor?: boolean;
 }
 
 export interface Application {

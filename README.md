@@ -1,13 +1,12 @@
 [![Build Status](https://travis-ci.com/skycoin/skywire.svg?branch=master)](https://travis-ci.com/skycoin/skywire)
 
-# Skywire 
+# Skywire Mainnet
 
-
-- [Skywire](#skywire)
+- [Skywire Mainnet](#skywire)
   - [Build and run](#build-and-run)
     - [Requirements](#requirements)
     - [Build](#build)
-    - [Configure](#conigure)
+    - [Configure](#configure)
       - [`stcp` setup](#stcp-setup)
       - [`dmsgpty` setup](#dmsgpty-setup)
       - [`hypervisor` setup](#hypervisor-setup)
@@ -16,7 +15,6 @@
     - [Run `hypervisor`](#run-hypervisor)
     - [Windows](#windows)
   - [Apps](#Apps)
-    - [Using the Skywire VPN](#using-the-skywire-vpn)
     - [App Programming API](#app-programming-api)
   - [Transports](#Transports)
   - [Creating a GitHub release](#creating-a-github-release)
@@ -92,7 +90,11 @@ In order to allow a hypervisor to access a visor,
 the address and PubKey of the hypervisor needs to be configured first on the visor. Here is an example configuration: 
 
 ```json
-  "hypervisors":["024a2dd77de324d543561a6d9e62791723be26ddf6b9587060a10b9ba498e096f1"],
+{
+  "hypervisors": [{
+    "public_key":"02b72766f0ebade8e06d6969b5aeedaff8bf8efd7867f362bb4a63135ab6009775"
+  }]
+}
 ```
 
 ### Run `skywire-visor`
@@ -102,7 +104,7 @@ that apps can use to implement communication protocols.
 App binaries are spawned by the visor, 
 communication between visor and app is performed via unix pipes provided on app startup.
 
-Note that `skywire-visor` requires a valid configuration file in order to execute. If you want to run the VPN client application distributed with Skywire you need to run the following command with `sudo`
+Note that `skywire-visor` requires a valid configuration file in order to execute.
 
 ```bash
 # Run skywire-visor. It takes one argument; the path of a configuration file (`skywire-config.json` if unspecified).
@@ -179,15 +181,7 @@ Refer to the following for usage of the apps:
 - [Skychat](/cmd/apps/skychat)
 - [Skysocks](/cmd/apps/skysocks) ([Client](/cmd/apps/skysocks-client))
 
-#### Using the Skywire VPN
-
-If you are interested in running the Skywire VPN as either a client or a server, please refer to the following guides:
-
-- [Setup the Skywire VPN](https://github.com/skycoin/skywire/wiki/Setting-up-Skywire-VPN)
-- [Setup the Skywire VPN server](https://github.com/skycoin/skywire/wiki/Setting-up-Skywire-VPN-server)
-
-
-#### App Programming API
+### App Programming API
 
 Skywire supports building custom apps. In order for visor to run a custom app, app binary should be put into the correct directory. This directory is specified in the visor config as `apps_path`. Each app has a list of parameters:
 - `app` (required) - contains application name. This should be equal to the binary name stored in the `apps_path` directory to be correctly resolved by the visor;
@@ -256,14 +250,6 @@ $ skywire-cli visor add-tp 0276ad1c5e77d7945ad6343a3c36a8014f463653b3375b6e02ebe
 # List established transports.
 $ skywire-cli visor ls-tp
 ```
-
-Currently there are 4 available transport types. 
-
-- [stcpr](https://github.com/skycoin/skywire/wiki/Transports#stcpr)
-- [sudph](https://github.com/skycoin/skywire/wiki/Transports#sudph)
-- [stcp](https://github.com/skycoin/skywire/wiki/Transports#stcp)
-- [dmsg](https://github.com/skycoin/skywire/wiki/Transports#dmsg)
-
 
 ## Creating a GitHub release
 

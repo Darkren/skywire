@@ -11,7 +11,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/go-chi/chi"
 	"github.com/skycoin/dmsg/cipher"
 	"github.com/skycoin/skycoin/src/util/logging"
 	"github.com/stretchr/testify/assert"
@@ -242,15 +241,12 @@ func TestUpdateStatuses(t *testing.T) {
 }
 
 func authHandler(t *testing.T, next http.Handler) http.Handler {
-	r := chi.NewRouter()
-
-	r.Handle("/security/nonces/{pk}", http.HandlerFunc(
+	m := http.NewServeMux()
+	m.Handle("/security/nonces/", http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			require.NoError(t, json.NewEncoder(w).Encode(&httpauth.NextNonceResponse{Edge: testPubKey, NextNonce: 1}))
 		},
 	))
-
-	r.Handle("/*", next)
-
-	return r
+	m.Handle("/", next)
+	return m
 }

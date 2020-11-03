@@ -108,7 +108,6 @@ export class UpdateProgressInfo {
 interface UpdateVersion {
   currentVersion: string;
   newVersion: string;
-  updateLink: string;
 }
 
 /**
@@ -252,7 +251,6 @@ export class UpdateComponent implements AfterViewInit, OnDestroy {
               currentVersion: updateInfo.current_version ?
                 updateInfo.current_version : this.translateService.instant('common.unknown'),
               newVersion: updateInfo.available_version,
-              updateLink: updateInfo.release_url,
             });
 
             updates.set(updateInfo.current_version + updateInfo.available_version, true);

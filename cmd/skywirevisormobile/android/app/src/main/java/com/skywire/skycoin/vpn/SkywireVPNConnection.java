@@ -119,12 +119,12 @@ public class SkywireVPNConnection implements Runnable {
                 Thread.sleep(3000);
             }
             Skywiremob.printString(getTag() + " Giving");
-        } catch (IOException | InterruptedException | IllegalArgumentException e) {
+        } catch (IOException | InterruptedException | IllegalArgumentException | PackageManager.NameNotFoundException e) {
             Skywiremob.printString(getTag() + " Connection failed, exiting " + e.getMessage());
         }
     }
     private boolean run(SocketAddress server)
-            throws IOException, InterruptedException, IllegalArgumentException {
+            throws IOException, InterruptedException, IllegalArgumentException, PackageManager.NameNotFoundException {
         ParcelFileDescriptor iface = null;
         boolean connected = false;
 
@@ -194,7 +194,7 @@ public class SkywireVPNConnection implements Runnable {
         return connected;
     }
 
-    private ParcelFileDescriptor configure() throws IllegalArgumentException {
+    private ParcelFileDescriptor configure() throws IllegalArgumentException, PackageManager.NameNotFoundException {
         // Configure a builder while parsing the parameters.
         VpnService.Builder builder = mService.new Builder();
 
@@ -206,6 +206,7 @@ public class SkywireVPNConnection implements Runnable {
         //builder.addDnsServer("192.168.1.1");
         builder.addRoute("0.0.0.0", 1);
         builder.addRoute("128.0.0.0", 1);
+        builder.addDisallowedApplication("com.skywire.skycoin.vpn");
 
         // Create a new interface using the builder and save the parameters.
         final ParcelFileDescriptor vpnInterface;

@@ -128,15 +128,14 @@
   "nodes": {
     "title": "Lista de visores",
     "dmsg-title": "DMSG",
+    "update-hypervisor": "Actualizar hypervisor",
     "update-all": "Actualizar todos los visores",
-    "hypervisor": "Hypervisor",
     "state": "Estado",
     "state-tooltip": "Estado actual",
     "label": "Etiqueta",
     "key": "Llave",
     "dmsg-server": "Servidor DMSG",
     "ping": "Ping",
-    "hypervisor-info": "Este visor es el Hypervisor actual.",
     "copy-key": "Copiar llave",
     "copy-dmsg": "Copiar llave DMSG",
     "copy-data": "Copiar datos",
@@ -148,7 +147,6 @@
     "empty-with-filter": "Ningun visor coincide con los criterios de filtrado seleccionados.",
     "delete-node-confirmation": "¿Seguro que desea remover el visor de la lista?",
     "delete-all-offline-confirmation": "¿Seguro que desea remover todos los visores offline de la lista?",
-    "delete-all-filtered-offline-confirmation": "Todos los visores offline que satisfagan los criterios de filtrado actuales serán removidos de la lista. ¿Seguro que desea continuar?",
     "deleted": "Visor removido.",
     "deleted-singular": "1 visor offline removido.",
     "deleted-plural": "{{ number }} visores offline removidos.",
@@ -275,6 +273,17 @@
     "install": "Instalar actualizaciones"
   },
 
+  "update-hypervisor": {
+    "title": "Actualizar Hypervisor",
+    "label": "Hypervisor",
+    "processing": "Buscando actualizaciones...",
+    "no-update": "No hay ninguna actualización para el hypervisor. La versión instalada actualmente es:",
+    "update-available": "Las siguiente actualización fue encontrada:",
+    "update-instructions": "Haga clic en el botón 'Instalar actualización' para continuar.",
+    "updating": "La operación de actualización se ha iniciado, puede abrir esta ventana nuevamente para verificar el progreso:",
+    "install": "Instalar actualización"
+  },
+
   "apps": {
     "log": {
       "title": "Log",
@@ -353,11 +362,6 @@
       "state-available": "Disponible",
       "state-offline": "Offline",
       "public-key": "Llave pública del visor remoto",
-      "password": "Contraseña",
-      "password-history-warning": "Nota: la contraseña no se guardará en el historial.",
-      "copy-pk-info": "Copiar la llave pública.",
-      "copied-pk-info": "La llave pública ha sido copiada.",
-      "copy-pk-error": "Hubo un problema al intentar cambiar la llave pública.",
       "no-elements": "Actualmente no hay elementos para mostrar. Por favor, inténtelo de nuevo más tarde.",
       "no-elements-for-filters": "No hay elementos que cumplan los criterios de filtro.",
       "no-filter": "No se ha seleccionado ningún filtro",
@@ -375,13 +379,6 @@
       "change-note-dialog": {
         "title": "Cambiar Nota",
         "note": "Nota"
-      },
-
-      "password-dialog": {
-        "title": "Introducir Contraseña",
-        "password": "Contraseña",
-        "info": "Se le solicita una contraseña porque una contraseña fue utilizada cuando se creó la entrada seleccionada, pero no fue guardada por razones de seguridad. Puede dejar la contraseña vacía si es necesario.",
-        "continue-button": "Continuar"
       },
 
       "filter-dialog": {
@@ -416,9 +413,6 @@
 
   "transports": {
     "title": "Transportes",
-    "remove-all-offline": "Remover todos los transportes offline",
-    "remove-all-offline-confirmation": "¿Seguro que desea remover todos los transportes offline?",
-    "remove-all-filtered-offline-confirmation": "Todos los transportes offline que satisfagan los criterios de filtrado actuales serán removidos. ¿Seguro que desea continuar?",
     "list-title": "Lista de transportes",
     "state": "Estado",
     "state-tooltip": "Estado actual",

@@ -4,7 +4,9 @@ import "net"
 
 // ServerHello is a message sent by server during the Client/Server handshake.
 type ServerHello struct {
-	Status     HandshakeStatus `json:"status"`
-	TUNIP      net.IP          `json:"tun_ip"`
-	TUNGateway net.IP          `json:"tun_gateway"`
+	Status           HandshakeStatus `json:"status"`
+	TUNIP            net.IP          `json:"tun_ip"`
+	TUNGateway       net.IP          `json:"tun_gateway"`
+	ServerTUNIP      net.IP          `json:"server_tun_ip"`
+	ServerTUNGateway net.IP          `json:"server_tun_gateway"`
 }

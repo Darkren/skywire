@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/skycoin/skywire/pkg/visor/visorerr"
-
 	"github.com/skycoin/dmsg"
 	"github.com/skycoin/dmsg/cipher"
 	"github.com/skycoin/dmsg/disc"
@@ -106,7 +104,7 @@ type Network struct {
 }
 
 // New creates a network from a config.
-func New(ctx context.Context, conf Config, eb *appevent.Broadcaster) *Network {
+func New(ctx context.Context, conf Config, eb *appevent.Broadcaster) (*Network, error) {
 	clients := NetworkClients{
 		Direct: make(map[string]directtp.Client),
 	}
@@ -140,12 +138,6 @@ func New(ctx context.Context, conf Config, eb *appevent.Broadcaster) *Network {
 			SK:        conf.SecKey,
 			Table:     pktable.NewTable(conf.NetworkConfigs.STCP.PKTable),
 			LocalAddr: conf.NetworkConfigs.STCP.LocalAddr,
-			BeforeDialCallback: func(network, addr string) error {
-				data := appevent.TCPDialData{RemoteNet: network, RemoteAddr: addr}
-				event := appevent.NewEvent(appevent.TCPDial, data)
-				_ = eb.Broadcast(context.Background(), event) //nolint:errcheck
-				return nil
-			},
 		}
 		clients.Direct[tptypes.STCP] = directtp.NewClient(conf)
 	}
@@ -156,12 +148,6 @@ func New(ctx context.Context, conf Config, eb *appevent.Broadcaster) *Network {
 			PK:              conf.PubKey,
 			SK:              conf.SecKey,
 			AddressResolver: conf.ARClient,
-			BeforeDialCallback: func(network, addr string) error {
-				data := appevent.TCPDialData{RemoteNet: network, RemoteAddr: addr}
-				event := appevent.NewEvent(appevent.TCPDial, data)
-				_ = eb.Broadcast(context.Background(), event) //nolint:errcheck
-				return nil
-			},
 		}
 
 		clients.Direct[tptypes.STCPR] = directtp.NewClient(stcprConf)
@@ -176,7 +162,7 @@ func New(ctx context.Context, conf Config, eb *appevent.Broadcaster) *Network {
 		clients.Direct[tptypes.SUDPH] = directtp.NewClient(sudphConf)
 	}
 
-	return NewRaw(conf, clients)
+	return NewRaw(conf, clients), nil
 }
 
 // NewRaw creates a network from a config and a dmsg client.
@@ -200,24 +186,20 @@ func NewRaw(conf Config, clients NetworkClients) *Network {
 	return n
 }
 
-// Conf gets network configuration.
-func (n *Network) Conf() Config {
-	return n.conf
-}
-
 // Init initiates server connections.
 func (n *Network) Init(ctx context.Context) error {
 	if n.clients.DmsgC != nil {
-		time.Sleep(200 * time.Millisecond)
-		go n.clients.DmsgC.Serve(context.Background())
-		time.Sleep(200 * time.Millisecond)
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			n.clients.DmsgC.Serve(ctx)
+			time.Sleep(200 * time.Millisecond)
+		}()
 	}
 
 	if n.conf.NetworkConfigs.STCP != nil {
 		if client, ok := n.clients.Direct[tptypes.STCP]; ok && client != nil && n.conf.NetworkConfigs.STCP.LocalAddr != "" {
 			if err := client.Serve(ctx); err != nil {
-				err = fmt.Errorf("failed to initiate 'stcp': %w", err)
-				return visorerr.NewErrorWithCode(err, visorerr.ErrCodeSTCPInitFailed)
+				return fmt.Errorf("failed to initiate 'stcp': %w", err)
 			}
 		} else {
 			log.Infof("No config found for stcp")
@@ -227,8 +209,7 @@ func (n *Network) Init(ctx context.Context) error {
 	if n.conf.ARClient != nil {
 		if client, ok := n.clients.Direct[tptypes.STCPR]; ok && client != nil {
 			if err := client.Serve(ctx); err != nil {
-				err = fmt.Errorf("failed to initiate 'stcpr': %w", err)
-				return visorerr.NewErrorWithCode(err, visorerr.ErrCodeSTCPRInitFailed)
+				return fmt.Errorf("failed to initiate 'stcpr': %w", err)
 			}
 
 			if n.conf.PublicTrusted {
@@ -240,8 +221,7 @@ func (n *Network) Init(ctx context.Context) error {
 
 		if client, ok := n.clients.Direct[tptypes.SUDPH]; ok && client != nil {
 			if err := client.Serve(ctx); err != nil {
-				err = fmt.Errorf("failed to initiate 'sudph': %w", err)
-				return visorerr.NewErrorWithCode(err, visorerr.ErrCodeSUDPHInitFailed)
+				return fmt.Errorf("failed to initiate 'sudph': %w", err)
 			}
 		} else {
 			log.Infof("No config found for sudph")
@@ -313,19 +293,13 @@ func (n *Network) Close() error {
 		}()
 	}
 
-	var directErrorsMu sync.Mutex
 	directErrors := make(map[string]error)
 
 	for k, v := range n.clients.Direct {
 		if v != nil {
 			wg.Add(1)
 			go func() {
-				err := v.Close()
-
-				directErrorsMu.Lock()
-				directErrors[k] = err
-				directErrorsMu.Unlock()
-
+				directErrors[k] = v.Close()
 				wg.Done()
 			}()
 		}

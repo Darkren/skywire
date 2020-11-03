@@ -128,7 +128,6 @@ func (v1 *V1) UpdateAppAutostart(launch *launcher.Launcher, appName string, auto
 }
 
 // UpdateAppArg updates the cli flag of the specified app config and also within the launcher.
-// It removes argName from app args if value is an empty string.
 // The updated config gets flushed to file if there are any changes.
 func (v1 *V1) UpdateAppArg(launch *launcher.Launcher, appName, argName, value string) error {
 	v1.mu.Lock()
@@ -136,7 +135,24 @@ func (v1 *V1) UpdateAppArg(launch *launcher.Launcher, appName, argName, value st
 
 	conf := v1.Launcher
 
-	configChanged := updateArg(conf, appName, argName, value)
+	configChanged := true
+	for i := range conf.Apps {
+		if conf.Apps[i].Name == appName {
+			configChanged = true
+
+			argChanged := false
+			for j := range conf.Apps[i].Args {
+				if conf.Apps[i].Args[j] == argName && j+1 < len(conf.Apps[i].Args) {
+					conf.Apps[i].Args[j+1] = value
+					argChanged = true
+					break
+				}
+			}
+			if !argChanged {
+				conf.Apps[i].Args = append(conf.Apps[i].Args, argName, value)
+			}
+		}
+	}
 
 	if !configChanged {
 		return nil
@@ -149,35 +165,4 @@ func (v1 *V1) UpdateAppArg(launch *launcher.Launcher, appName, argName, value st
 	})
 
 	return v1.flush(v1)
-}
-
-func updateArg(conf *V1Launcher, appName, argName, value string) bool {
-	configChanged := false
-
-	for i := range conf.Apps {
-		if conf.Apps[i].Name == appName {
-			configChanged = true
-
-			argChanged := false
-			l := len(conf.Apps[i].Args)
-			for j := 0; j < l; j++ {
-				if conf.Apps[i].Args[j] == argName && j+1 < len(conf.Apps[i].Args) {
-					if value == "" {
-						conf.Apps[i].Args = append(conf.Apps[i].Args[:j], conf.Apps[i].Args[j+2:]...)
-						j--
-					} else {
-						conf.Apps[i].Args[j+1] = value
-					}
-					argChanged = true
-					break
-				}
-			}
-
-			if !argChanged {
-				conf.Apps[i].Args = append(conf.Apps[i].Args, argName, value)
-			}
-		}
-	}
-
-	return configChanged
 }

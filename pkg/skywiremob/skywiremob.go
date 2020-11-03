@@ -9,8 +9,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
-	"github.com/skycoin/skywire/pkg/visor/visorerr"
+	"github.com/skycoin/dmsg/netutil"
 
 	"github.com/sirupsen/logrus"
 	"github.com/skycoin/dmsg"
@@ -23,36 +24,6 @@ import (
 	"github.com/skycoin/skywire/pkg/skyenv"
 	"github.com/skycoin/skywire/pkg/visor"
 	"github.com/skycoin/skywire/pkg/visor/visorconfig"
-)
-
-// here we redefine constants, so that this list would be exposed to the mobile app.
-// We also have to case it to int, so the mobile app can work with these
-const (
-	ErrCodeNoError                = int(visorerr.ErrCodeNoError)
-	ErrCodeInvalidPK              = int(visorerr.ErrCodeInvalidPK)
-	ErrCodeInvalidVisorConfig     = int(visorerr.ErrCodeInvalidVisorConfig)
-	ErrCodeInvalidAddrResolverURL = int(visorerr.ErrCodeInvalidAddrResolverURL)
-	ErrCodeSTCPInitFailed         = int(visorerr.ErrCodeSTCPInitFailed)
-	ErrCodeSTCPRInitFailed        = int(visorerr.ErrCodeSTCPRInitFailed)
-	ErrCodeSUDPHInitFailed        = int(visorerr.ErrCodeSUDPHInitFailed)
-	ErrCodeDmsgListenFailed       = int(visorerr.ErrCodeDmsgListenFailed)
-	ErrCodeTpDiscUnavailable      = int(visorerr.ErrCodeTpDiscUnavailable)
-	ErrCodeFailedToStartRouter    = int(visorerr.ErrCodeFailedToStartRouter)
-	ErrCodeFailedToSetupHVGateway = int(visorerr.ErrCodeFailedToSetupHVGateway)
-
-	ErrCodeUnknown = int(visorerr.ErrCodeUnknown)
-)
-
-const (
-	ErrCodeVisorNotRunning int = iota + 901
-	ErrCodeInvalidRemotePK
-	ErrCodeFailedToSaveTransport
-	ErrCodeVPNServerUnavailable
-	ErrCodeVPNClientNotRunning
-	ErrCodeHandshakeFailed
-	ErrCodeInvalidAddr
-	ErrCodeAlreadyListeningUDP
-	ErrCodeUDPListenFailed
 )
 
 const (
@@ -117,14 +88,13 @@ func PrintString(str string) {
 }
 
 // IsPKValid checks if pub key is valid. Returns non-empty error string on failure.
-func IsPKValid(pkStr string) int {
+func IsPKValid(pkStr string) string {
 	var pk cipher.PubKey
 	if err := pk.UnmarshalText([]byte(pkStr)); err != nil {
-		log.WithError(err).Errorln("Invalid PK")
-		return ErrCodeInvalidPK
+		return fmt.Errorf("invalid PK: %w", err).Error()
 	}
 
-	return ErrCodeNoError
+	return ""
 }
 
 // GetMTU returns VPN connection MTU.
@@ -163,30 +133,38 @@ var log = logging.NewMasterLogger()
 var (
 	globalVisorMx     sync.Mutex
 	globalVisor       *visor.Visor
+	globalCtx         context.Context
 	globalVisorDone   = make(chan struct{})
 	globalVisorReady  = make(chan error, 2)
 	globalVisorCancel func()
 
-	vpnClientMx sync.Mutex
-	vpnClient   *vpn.ClientMobile
+	vpnClientMx      sync.Mutex
+	isVpnClientReady bool
+	vpnClientErrCh   = make(chan error, 2)
+	vpnClient        *vpn.ClientMobile
 
-	tunCredsMx sync.Mutex
-	tunIP      net.IP
-	tunGateway net.IP
+	tunCredsMx       sync.Mutex
+	clientTUNIP      net.IP
+	clientTUNGateway net.IP
+	serverTUNIP      net.IP
+	serverTUNGateway net.IP
 )
 
 // PrepareVisor creates and runs visor instance.
-func PrepareVisor() int {
+func PrepareVisor() string {
 	// set the same init stack as usual, but without apps launcher
 	visor.SetInitStack(func() []visor.InitFunc {
 		return []visor.InitFunc{
+			visor.InitUpdater,
 			visor.InitEventBroadcaster,
 			visor.InitAddressResolver,
 			visor.InitDiscovery,
 			visor.InitSNet,
+			visor.InitDmsgpty,
 			visor.InitTransport,
 			visor.InitRouter,
 			visor.InitNetworkers,
+			visor.InitCLI,
 			visor.InitHypervisors,
 			visor.InitUptimeTracker,
 			visor.InitTrustedVisors,
@@ -196,8 +174,7 @@ func PrepareVisor() int {
 	// we use STDIN not to flush the config
 	conf, err := initConfig(log, visorconfig.StdinName)
 	if err != nil {
-		log.WithError(err).Errorln("Error getting visor config")
-		return ErrCodeInvalidVisorConfig
+		return fmt.Errorf("error getting visor config: %v", err).Error()
 	}
 
 	log.Infoln("Initialized config")
@@ -209,6 +186,7 @@ func PrepareVisor() int {
 	globalVisorMx.Lock()
 	globalVisor = v
 	globalVisorCancel = cancel
+	globalCtx = ctx
 	globalVisorMx.Unlock()
 
 	go func() {
@@ -223,8 +201,9 @@ func PrepareVisor() int {
 		atomic.StoreInt32(&isVisorStarting, 1)
 
 		var err error
-		if err := v.Start(ctx); err != nil {
-			log.WithError(err).Errorln("Failed to start visor")
+		if ok := v.Start(ctx); !ok {
+			log.Errorln("Failed to start visor")
+			err = errors.New("failed to start visor")
 		} else {
 			atomic.StoreInt32(&isVisorStarting, 0)
 			atomic.StoreInt32(&isVisorRunning, 1)
@@ -237,26 +216,20 @@ func PrepareVisor() int {
 		globalVisorMx.Unlock()
 	}(ctx)
 
-	return ErrCodeNoError
+	return ""
 }
 
 // WaitVisorReady blocks until visor gets fully initialized.
-func WaitVisorReady() int {
+func WaitVisorReady() string {
 	globalVisorMx.Lock()
 	ready := globalVisorReady
 	globalVisorMx.Unlock()
 
 	if err := <-ready; err != nil {
-		log.WithError(err).Errorln("Failed to start up visor")
-		var e *visorerr.ErrorWithCode
-		if errors.As(err, &e) {
-			return int(e.Code)
-		}
-
-		return ErrCodeUnknown
+		return err.Error()
 	}
 
-	return ErrCodeNoError
+	return ""
 }
 
 var (
@@ -327,80 +300,233 @@ func NextDmsgSocket() int {
 	return int(fd)
 }
 
+func dialVisor(srvPK cipher.PubKey, passcode string) {
+	for {
+		log.Infoln("REDIAL LOOP STARTED AGAIN")
+		r := netutil.NewRetrier(nil, 1*time.Second, 3*time.Second, 0, netutil.DefaultFactor)
+
+		globalVisorMx.Lock()
+		ctx := globalCtx
+		v := globalVisor
+		globalVisorMx.Unlock()
+
+		if ctx == nil || v == nil {
+			log.Infoln("CTX OR VISOR IS NIL")
+			// TODO(darkrengarius): return error?
+			return
+		}
+
+		var errCh chan error
+
+		r.Do(ctx, func() error {
+			if _, err := v.SaveTransport(ctx, srvPK, dmsg.Type); err != nil {
+				if strings.Contains(err.Error(), context.Canceled.Error()) {
+					return nil
+				}
+
+				return fmt.Errorf("failed to save transport to VPN server: %w", err)
+			}
+
+			log.Infoln("Saved transport to VPN server")
+
+			vpnPort := routing.Port(skyenv.VPNServerPort)
+
+			connRaw, err := appnet.DialContext(ctx, appnet.Addr{
+				Net:    appnet.TypeSkynet,
+				PubKey: srvPK,
+				Port:   vpnPort,
+			})
+			if err != nil {
+				if err == context.Canceled {
+					return nil
+				}
+
+				return fmt.Errorf("failed to dial VPN server: %w", err)
+			}
+
+			log.Infoln("Dialed VPN server")
+
+			conn, err := appnet.WrapConn(connRaw)
+			if err != nil {
+				return fmt.Errorf("failed to wrap app conn: %w", err)
+			}
+
+			log.Infoln("Wrapped app conn")
+
+			vpnClientCfg := vpn.ClientConfig{
+				Passcode: passcode,
+			}
+
+			vpnCl, err := vpn.NewClientMobile(vpnClientCfg, logrus.New(), conn)
+			if err != nil {
+				return fmt.Errorf("failed to create VPN client: %w", err)
+			}
+
+			vpnClientMx.Lock()
+			select {
+			case <-ctx.Done():
+				vpnClientMx.Unlock()
+				return nil
+			default:
+			}
+			vpnClient = vpnCl
+			isVpnClientReady = true
+			vpnClientErrCh = make(chan error, 2)
+			errCh = vpnClientErrCh
+			vpnClientMx.Unlock()
+
+			log.Infoln("Created VPN client")
+
+			return nil
+		})
+
+		vpnClientMx.Lock()
+		select {
+		case <-ctx.Done():
+			vpnClientMx.Unlock()
+			return
+		default:
+		}
+		vpnCl := vpnClient
+		vpnClientMx.Unlock()
+
+		if vpnCl == nil {
+			// TODO
+			//return "vpn client is not ready"
+		}
+
+		tunCredsMx.Lock()
+		tunIPInternal := clientTUNIP
+		tunGatewayInternal := clientTUNGateway
+		serverTUNIPInternal := serverTUNIP
+		serverTUNGatewayInternal := serverTUNGateway
+		tunCredsMx.Unlock()
+
+		var err error
+
+		if tunIPInternal != nil && tunGatewayInternal != nil &&
+			serverTUNIPInternal != nil && serverTUNGatewayInternal != nil {
+			tunIPInternal, tunGatewayInternal, serverTUNIPInternal, serverTUNGatewayInternal, err = vpnCl.ShakeHandsKeepingCreds(tunIPInternal, tunGatewayInternal, serverTUNIPInternal, serverTUNGatewayInternal)
+			if err != nil {
+				// TODO
+				//eturn fmt.Errorf("handshake error: %w", err).Error()
+			}
+		} else {
+			tunIPInternal, tunGatewayInternal, serverTUNIPInternal, serverTUNGatewayInternal, err = vpnCl.ShakeHands()
+			if err != nil {
+				// TODO
+				//eturn fmt.Errorf("handshake error: %w", err).Error()
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		log.Infoln("Shook hands with VPN server")
+
+		tunCredsMx.Lock()
+		clientTUNIP = tunIPInternal
+		clientTUNGateway = tunGatewayInternal
+		serverTUNIP = serverTUNIPInternal
+		serverTUNGateway = serverTUNGatewayInternal
+		tunCredsMx.Unlock()
+
+		log.Println("Set TUN IP and gateway")
+
+		go func() {
+			mobileAppAddrMu.Lock()
+			tunAddr := mobileAppAddr
+			mobileAppAddrMu.Unlock()
+
+			if tunAddr == nil {
+				addr, ok := <-mobileAppAddrCh
+				if !ok {
+					return
+				}
+
+				mobileAppAddrMu.Lock()
+				mobileAppAddr = addr
+				mobileAppAddrMu.Unlock()
+
+				tunAddr = addr
+			}
+
+			log.Infof("Got mobile app UDP addr: %s\n", tunAddr.String())
+
+			globalUDPConnMu.Lock()
+			udpConn := globalUDPConn
+			globalUDPConnMu.Unlock()
+
+			if udpConn == nil {
+				return
+			}
+
+			wr := vpn.NewUDPConnWriter(udpConn, tunAddr)
+
+			if err := vpnCl.Serve(wr); err != nil {
+				log.WithError(err).Errorln("Failed to serve VPN")
+				vpnClientErrCh <- err
+			}
+		}()
+
+		atomic.StoreInt32(&isVPNReady, 1)
+
+		// TODO: distinguish this from user-intended visor stop
+		err = <-vpnClientErrCh
+		if err == nil /*|| !strings.Contains(err.Error(), "keep-alive") */ {
+			return
+		}
+
+		vpnClientMx.Lock()
+		if vpnClient != nil {
+			vpnClient.Close()
+		}
+		vpnClient = nil
+		isVpnClientReady = false
+		vpnClientMx.Unlock()
+
+		atomic.StoreInt32(&isVPNReady, 0)
+
+		log.Printf("VPN FAILED, RETRYING")
+	}
+}
+
 // PrepareVPNClient creates and runs VPN client instance.
-func PrepareVPNClient(srvPKStr, passcode string) int {
+func PrepareVPNClient(srvPKStr, passcode string) string {
 	globalVisorMx.Lock()
 	v := globalVisor
 	globalVisorMx.Unlock()
 
 	if v == nil {
-		return ErrCodeVisorNotRunning
+		return "visor is not ready yet"
 	}
 
 	var srvPK cipher.PubKey
 	if err := srvPK.UnmarshalText([]byte(srvPKStr)); err != nil {
-		log.WithError(err).Errorln("invalid remote PK")
-		return ErrCodeInvalidRemotePK
+		return fmt.Errorf("invalid remote PK: %w", err).Error()
 	}
 
-	if _, err := v.SaveTransport(context.Background(), srvPK, dmsg.Type); err != nil {
-		log.WithError(err).Errorln("failed to save transport to VPN server")
-		return ErrCodeFailedToSaveTransport
-	}
+	go dialVisor(srvPK, passcode)
 
-	log.Infoln("Saved transport to VPN server")
-
-	vpnPort := routing.Port(skyenv.VPNServerPort)
-
-	connRaw, err := appnet.Dial(appnet.Addr{
-		Net:    appnet.TypeSkynet,
-		PubKey: srvPK,
-		Port:   vpnPort,
-	})
-	if err != nil {
-		log.WithError(err).Errorln("failed to dial VPN server")
-		return ErrCodeVPNServerUnavailable
-	}
-
-	log.Infoln("Dialed VPN server")
-
-	conn, err := appnet.WrapConn(connRaw)
-	if err != nil {
-		log.WithError(err).Errorln("failed to wrap app conn")
-		return ErrCodeUnknown
-	}
-
-	log.Infoln("Wrapped app conn")
-
-	vpnClientCfg := vpn.ClientConfig{
-		Passcode: passcode,
-	}
-
-	vpnCl := vpn.NewClientMobile(vpnClientCfg, logrus.New(), conn)
-
-	vpnClientMx.Lock()
-	vpnClient = vpnCl
-	vpnClientMx.Unlock()
-
-	log.Infoln("Created VPN client")
-
-	return ErrCodeNoError
+	return ""
 }
 
 // ShakeHands performs VPN client/server handshake.
-func ShakeHands() int {
+/*func ShakeHands() string {
 	vpnClientMx.Lock()
 	vpnCl := vpnClient
 	vpnClientMx.Unlock()
 
 	if vpnCl == nil {
-		return ErrCodeVPNClientNotRunning
+		return "vpn client is not ready"
 	}
 
 	tunIPInternal, tunGatewayInternal, err := vpnCl.ShakeHands()
 	if err != nil {
-		log.WithError(err).Errorln("handshake error")
-		return ErrCodeHandshakeFailed
+		return fmt.Errorf("handshake error: %w", err).Error()
 	}
 
 	log.Infoln("Shook hands with VPN server")
@@ -412,74 +538,19 @@ func ShakeHands() int {
 
 	log.Println("Set TUN IP and gateway")
 
-	return ErrCodeNoError
-}
-
-func getVPNSkywireConn() (*appnet.SkywireConn, bool) {
-	vpnClientMx.Lock()
-	vpnCl := vpnClient
-	vpnClientMx.Unlock()
-
-	if vpnCl == nil {
-		return nil, false
-	}
-
-	wrappedConn := vpnCl.GetConn().(*appnet.WrappedConn)
-	skywireConn := wrappedConn.Conn.(*appnet.SkywireConn)
-
-	return skywireConn, true
-}
-
-// VPNBandwidthSent returns amount of bandwidth sent (bytes).
-func VPNBandwidthSent() int64 {
-	conn, ok := getVPNSkywireConn()
-	if !ok {
-		return 0
-	}
-
-	return int64(conn.BandwidthSent())
-}
-
-// VPNBandwidthReceived returns amount of bandwidth received (bytes).
-func VPNBandwidthReceived() int64 {
-	conn, ok := getVPNSkywireConn()
-	if !ok {
-		return 0
-	}
-
-	return int64(conn.BandwidthReceived())
-}
-
-// VPNLatency returns latency till remote (ms).
-func VPNLatency() int64 {
-	conn, ok := getVPNSkywireConn()
-	if !ok {
-		return 0
-	}
-
-	return conn.Latency().Milliseconds()
-}
-
-// VPNThroughput returns throughput till remote (bytes/s).
-func VPNThroughput() int64 {
-	conn, ok := getVPNSkywireConn()
-	if !ok {
-		return 0
-	}
-
-	return int64(conn.Throughput())
-}
+	return ""
+}*/
 
 // TUNIP gets assigned TUN IP address.
 func TUNIP() string {
 	tunCredsMx.Lock()
 	defer tunCredsMx.Unlock()
 
-	if tunIP == nil {
+	if clientTUNIP == nil {
 		return ""
 	}
 
-	return tunIP.String()
+	return clientTUNIP.String()
 }
 
 // TUNGateway gets assigned TUN gateway.
@@ -487,11 +558,11 @@ func TUNGateway() string {
 	tunCredsMx.Lock()
 	defer tunCredsMx.Unlock()
 
-	if tunGateway == nil {
+	if clientTUNGateway == nil {
 		return ""
 	}
 
-	return tunGateway.String()
+	return clientTUNGateway.String()
 }
 
 // StopVPNClient stops VPN client.
@@ -510,7 +581,7 @@ func StopVPNClient() {
 }
 
 // StopVisor stops running visor. Returns non-empty error string on failure.
-func StopVisor() int {
+func StopVisor() string {
 	globalVisorMx.Lock()
 	v := globalVisor
 	cancel := globalVisorCancel
@@ -519,7 +590,7 @@ func StopVisor() int {
 	globalVisorMx.Unlock()
 
 	if v == nil || cancel == nil {
-		return ErrCodeVisorNotRunning
+		return "visor is not running"
 	}
 
 	cancel()
@@ -540,11 +611,12 @@ func StopVisor() int {
 	globalVisorMx.Lock()
 	globalVisor = nil
 	globalVisorCancel = nil
+	globalCtx = nil
 	globalVisorDone = make(chan struct{})
 	globalVisorReady = make(chan error, 2)
 	globalVisorMx.Unlock()
 
-	return ErrCodeNoError
+	return ""
 }
 
 func initConfig(mLog *logging.MasterLogger, confPath string) (*visorconfig.V1, error) {
@@ -560,25 +632,22 @@ func initConfig(mLog *logging.MasterLogger, confPath string) (*visorconfig.V1, e
 	return conf, nil
 }
 
+var mobileAppAddrMu sync.Mutex
+var mobileAppAddr *net.UDPAddr
 var mobileAppAddrCh = make(chan *net.UDPAddr, 2)
 
 // SetMobileAppAddr sets address of the UDP connection opened on the mobile application side.
-func SetMobileAppAddr(addr string) int {
+func SetMobileAppAddr(addr string) {
 	// address passed from the Android device contains `/` prefix, strip it.
 	addr = strings.TrimLeft(addr, " /")
 
 	tokens := strings.Split(addr, ":")
 
-	if len(tokens) != 2 {
-		log.Errorf("Android app addr is invalid (wrong tokens number): %s", addr)
-		return ErrCodeInvalidAddr
-	}
-
 	addrIP := net.ParseIP(tokens[0])
 	addrPort, err := strconv.Atoi(tokens[1])
 	if err != nil {
 		log.WithError(err).Errorln("Failed to parse android app port")
-		return ErrCodeInvalidAddr
+		return
 	}
 
 	mobileAppAddrCh <- &net.UDPAddr{
@@ -586,8 +655,6 @@ func SetMobileAppAddr(addr string) int {
 		Port: addrPort,
 		Zone: "",
 	}
-
-	return ErrCodeNoError
 }
 
 var (
@@ -596,19 +663,18 @@ var (
 )
 
 // ServeVPN starts handling VPN traffic.
-func ServeVPN() int {
+/*func ServeVPN() string {
 	vpnClientMx.Lock()
 	vpnCl := vpnClient
 	vpnClientMx.Unlock()
 
 	if vpnCl == nil {
-		return ErrCodeVPNClientNotRunning
+		return "vpn client is not ready"
 	}
 
 	go func() {
 		tunAddr, ok := <-mobileAppAddrCh
 		if !ok {
-			log.Infoln("DIDN'T GET UDP ADDR, VISOR IS STOPPED, RETURNING...")
 			return
 		}
 
@@ -631,16 +697,15 @@ func ServeVPN() int {
 
 	atomic.StoreInt32(&isVPNReady, 1)
 
-	return ErrCodeNoError
-}
+	return ""
+}*/
 
 // StartListeningUDP starts listening UDP.
-func StartListeningUDP() int {
+func StartListeningUDP() string {
 	globalUDPConnMu.Lock()
 	if globalUDPConn != nil {
 		globalUDPConnMu.Unlock()
-		log.Errorln("UDP connection is already open")
-		return ErrCodeAlreadyListeningUDP
+		return errors.New("UDP connection is already open").Error()
 	}
 
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{
@@ -648,8 +713,7 @@ func StartListeningUDP() int {
 		Port: 7890,
 	})
 	if err != nil {
-		log.WithError(err).Errorln("Failed to listen UDP")
-		return ErrCodeUDPListenFailed
+		return fmt.Errorf("failed to listen UDP: %w", err).Error()
 	}
 
 	globalUDPConn = conn
@@ -657,7 +721,7 @@ func StartListeningUDP() int {
 
 	log.Infoln("Listening UDP")
 
-	return ErrCodeNoError
+	return ""
 }
 
 // StopListeningUDP closes UDP socket.

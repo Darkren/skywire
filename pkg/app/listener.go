@@ -2,7 +2,6 @@ package app
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 
@@ -27,14 +26,14 @@ type Listener struct {
 
 // Accept accepts a connection from listener.
 func (l *Listener) Accept() (net.Conn, error) {
-	fmt.Print("Calling app RPC Accept")
+	l.log.Infoln("Calling app RPC Accept")
 
 	connID, remote, err := l.rpc.Accept(l.id)
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Print("Accepted conn from app RPC")
+	l.log.Infoln("Accepted conn from app RPC")
 
 	conn := &Conn{
 		id:     connID,

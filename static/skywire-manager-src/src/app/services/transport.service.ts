@@ -1,6 +1,5 @@
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
-import { map } from 'rxjs/operators';
 
 import { ApiService } from './api.service';
 import { Transport } from '../app.datatypes';
@@ -20,15 +19,7 @@ export class TransportService {
    * Get a list with the transports of a node.
    */
   getTransports(nodeKey: string): Observable<Transport[]> {
-    return this.apiService.get(`visors/${nodeKey}/transports`).pipe(
-      map(val => {
-        if (!val) {
-          return [];
-        }
-
-        return val;
-      })
-    );
+    return this.apiService.get(`visors/${nodeKey}/transports`);
   }
 
   create(nodeKey: string, remoteKey: string, type: string): Observable<any> {

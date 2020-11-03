@@ -9,7 +9,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/go-chi/chi"
 	"github.com/skycoin/dmsg/cipher"
 	"github.com/skycoin/skycoin/src/util/logging"
 	"github.com/stretchr/testify/assert"
@@ -85,9 +84,9 @@ func TestBind(t *testing.T) {
 func authHandler(next http.Handler) http.Handler {
 	log := logging.MustGetLogger("arclient_test")
 	testPubKey, _ := cipher.GenerateKeyPair()
-	r := chi.NewRouter()
+	m := http.NewServeMux()
 
-	r.Handle("/security/nonces/{pk}", http.HandlerFunc(
+	m.Handle("/security/nonces/", http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			if err := json.NewEncoder(w).Encode(&httpauth.NextNonceResponse{Edge: testPubKey, NextNonce: 1}); err != nil {
 				log.WithError(err).Error("Failed to encode nonce response")
@@ -95,7 +94,7 @@ func authHandler(next http.Handler) http.Handler {
 		},
 	))
 
-	r.Handle("/*", next)
+	m.Handle("/", next)
 
-	return r
+	return m
 }

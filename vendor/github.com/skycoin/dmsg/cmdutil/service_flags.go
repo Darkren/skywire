@@ -12,8 +12,6 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/go-chi/chi"
-	"github.com/go-chi/chi/middleware"
 	"github.com/sirupsen/logrus"
 	logrussyslog "github.com/sirupsen/logrus/hooks/syslog"
 	"github.com/skycoin/skycoin/src/util/logging"
@@ -149,8 +147,7 @@ func (sf *ServiceFlags) Logger() *logging.Logger {
 	}
 
 	if discordWebhookURL := discord.GetWebhookURLFromEnv(); discordWebhookURL != "" {
-		discordOpts := discord.GetDefaultOpts()
-		hook := discord.NewHook(sf.Tag, discordWebhookURL, discordOpts...)
+		hook := discord.NewHook(sf.Tag, discordWebhookURL)
 		logging.AddHook(hook)
 	}
 
@@ -236,18 +233,12 @@ func (sf *ServiceFlags) HTTPMetrics() promutil.HTTPMetrics {
 	m := promutil.NewHTTPMetrics(sf.Tag)
 	sf.metrics = m
 
-	r := chi.NewRouter()
-
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-
-	promutil.AddMetricsHandle(r, m.Collectors()...)
+	mux := http.NewServeMux()
+	promutil.AddMetricsHandle(mux, m.Collectors()...)
 
 	addr := sf.MetricsAddr
 	sf.logger.WithField("addr", addr).Info("Serving metrics.")
-	go func() { sf.logger.Fatal(http.ListenAndServe(addr, r)) }()
+	go func() { sf.logger.Fatal(http.ListenAndServe(addr, mux)) }()
 
 	return m
 }

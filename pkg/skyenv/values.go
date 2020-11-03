@@ -6,12 +6,6 @@ import (
 	"github.com/skycoin/dmsg/cipher"
 )
 
-// Constants for skywire root directories.
-const (
-	DefaultSkywirePath = "/opt/skywire"
-	TestSkywirePath    = "."
-)
-
 // Constants for default services.
 const (
 	DefaultTpDiscAddr          = "http://transport.discovery.skywire.skycoin.com"
@@ -50,8 +44,7 @@ const (
 
 	DefaultDmsgPtyCLINet    = "unix"
 	DefaultDmsgPtyCLIAddr   = "/tmp/dmsgpty.sock"
-	DefaultDmsgPtyWhitelist = DefaultSkywirePath + "/dmsgpty/whitelist.json"
-	TestDmsgPtyWhiteList    = TestSkywirePath + "/dmsgpty/whitelist.json"
+	DefaultDmsgPtyWhitelist = "./dmsgpty/whitelist.json"
 )
 
 // Default STCP constants.
@@ -92,17 +85,14 @@ const (
 const (
 	DefaultAppSrvAddr     = "localhost:5505"
 	AppDiscUpdateInterval = 30 * time.Second
-	DefaultAppLocalPath   = DefaultSkywirePath + "/local"
-	TestAppLocalPath      = TestSkywirePath + "/local"
-	TestAppBinPath        = TestSkywirePath + "/apps"
-	DefaultAppBinPath     = DefaultSkywirePath + "/apps"
+	DefaultAppLocalPath   = "./local"
+	DefaultAppBinPath     = "./apps"
 	DefaultLogLevel       = "info"
 )
 
 // Default routing constants
 const (
-	DefaultTpLogStore = DefaultSkywirePath + "/transport_logs"
-	TestTpLogStore    = TestSkywirePath + "/transport_logs"
+	DefaultTpLogStore = "./transport_logs"
 )
 
 // Default hypervisor constants

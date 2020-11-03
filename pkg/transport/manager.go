@@ -16,8 +16,6 @@ import (
 	"github.com/skycoin/skywire/pkg/routing"
 	"github.com/skycoin/skywire/pkg/skyenv"
 	"github.com/skycoin/skywire/pkg/snet"
-	"github.com/skycoin/skywire/pkg/snet/arclient"
-	"github.com/skycoin/skywire/pkg/snet/directtp/tptypes"
 	"github.com/skycoin/skywire/pkg/snet/snettest"
 )
 
@@ -25,9 +23,6 @@ const (
 	// TrustedVisorsDelay defines a delay before adding transports to trusted visors.
 	TrustedVisorsDelay = 5 * time.Second
 )
-
-// TPCloseCallback triggers after a session is closed.
-type TPCloseCallback func(network, addr string)
 
 // ManagerConfig configures a Manager.
 type ManagerConfig struct {
@@ -56,13 +51,11 @@ type Manager struct {
 	serveOnce     sync.Once // ensure we only serve once.
 	closeOnce     sync.Once // ensure we only close once.
 	done          chan struct{}
-
-	afterTPClosed TPCloseCallback
 }
 
 // NewManager creates a Manager with the provided configuration and transport factories.
 // 'factories' should be ordered by preference.
-func NewManager(log *logging.Logger, n *snet.Network, config *ManagerConfig) *Manager {
+func NewManager(log *logging.Logger, n *snet.Network, config *ManagerConfig) (*Manager, error) {
 	if log == nil {
 		log = logging.MustGetLogger("tp_manager")
 	}
@@ -75,20 +68,7 @@ func NewManager(log *logging.Logger, n *snet.Network, config *ManagerConfig) *Ma
 		readCh:      make(chan routing.Packet, 20),
 		done:        make(chan struct{}),
 	}
-	return tm
-}
-
-// OnAfterTPClosed sets callback which will fire after transport gets closed.
-func (tm *Manager) OnAfterTPClosed(f TPCloseCallback) {
-	tm.mx.Lock()
-	defer tm.mx.Unlock()
-
-	tm.afterTPClosed = f
-
-	// set callback for all already known tps
-	for _, tp := range tm.tps {
-		tp.onAfterClosed(f)
-	}
+	return tm, nil
 }
 
 // Serve runs listening loop across all registered factories.
@@ -230,14 +210,7 @@ func (tm *Manager) acceptTransport(ctx context.Context, lis *snet.Listener) erro
 	if !ok {
 		tm.Logger.Debugln("No TP found, creating new one")
 
-		mTp = NewManagedTransport(ManagedTransportConfig{
-			Net:         tm.n,
-			DC:          tm.Conf.DiscoveryClient,
-			LS:          tm.Conf.LogStore,
-			RemotePK:    conn.RemotePK(),
-			NetName:     lis.Network(),
-			AfterClosed: tm.afterTPClosed,
-		})
+		mTp = NewManagedTransport(tm.n, tm.Conf.DiscoveryClient, tm.Conf.LogStore, conn.RemotePK(), lis.Network())
 
 		go func() {
 			mTp.Serve(tm.readCh)
@@ -324,34 +297,14 @@ func (tm *Manager) saveTransport(remote cipher.PubKey, netName string) (*Managed
 
 	oldMTp, ok := tm.tps[tpID]
 	if ok {
+		tm.Logger.Info("GOT ALREADY EXISTING TP")
 		tm.Logger.Debug("Found an old mTp from internal map.")
 		return oldMTp, nil
 	}
 
-	afterTPClosed := tm.afterTPClosed
+	tm.Logger.Info("CREATING NEW TP")
 
-	mTp := NewManagedTransport(ManagedTransportConfig{
-		Net:         tm.n,
-		DC:          tm.Conf.DiscoveryClient,
-		LS:          tm.Conf.LogStore,
-		RemotePK:    remote,
-		NetName:     netName,
-		AfterClosed: afterTPClosed,
-	})
-
-	if mTp.netName == tptypes.STCPR {
-		ar := mTp.n.Conf().ARClient
-		if ar != nil {
-			visorData, err := ar.Resolve(context.Background(), mTp.netName, remote)
-			if err == nil {
-				mTp.remoteAddr = visorData.RemoteAddr
-			} else {
-				if err != arclient.ErrNoEntry {
-					return nil, fmt.Errorf("failed to resolve %s: %w", remote, err)
-				}
-			}
-		}
-	}
+	mTp := NewManagedTransport(tm.n, tm.Conf.DiscoveryClient, tm.Conf.LogStore, remote, netName)
 	go func() {
 		mTp.Serve(tm.readCh)
 		tm.mx.Lock()
@@ -362,22 +315,6 @@ func (tm *Manager) saveTransport(remote cipher.PubKey, netName string) (*Managed
 
 	tm.Logger.Infof("saved transport: remote(%s) type(%s) tpID(%s)", remote, netName, tpID)
 	return mTp, nil
-}
-
-// STCPRRemoteAddrs gets remote IPs for all known STCPR transports.
-func (tm *Manager) STCPRRemoteAddrs() []string {
-	var addrs []string
-
-	tm.mx.RLock()
-	defer tm.mx.RUnlock()
-
-	for _, tp := range tm.tps {
-		if tp.Entry.Type == tptypes.STCPR && tp.remoteAddr != "" {
-			addrs = append(addrs, tp.remoteAddr)
-		}
-	}
-
-	return addrs
 }
 
 // DeleteTransport deregisters the Transport of Transport ID in transport discovery and deletes it locally.
@@ -505,24 +442,30 @@ func CreateTransportPair(
 	// Prepare tp manager 0.
 	pk0, sk0 := keys[0].PK, keys[0].SK
 	ls0 := InMemoryTransportLogStore()
-	m0 = NewManager(nil, nEnv.Nets[0], &ManagerConfig{
+	m0, err = NewManager(nil, nEnv.Nets[0], &ManagerConfig{
 		PubKey:          pk0,
 		SecKey:          sk0,
 		DiscoveryClient: tpDisc,
 		LogStore:        ls0,
 	})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 
 	go m0.Serve(context.TODO())
 
 	// Prepare tp manager 1.
 	pk1, sk1 := keys[1].PK, keys[1].SK
 	ls1 := InMemoryTransportLogStore()
-	m1 = NewManager(nil, nEnv.Nets[1], &ManagerConfig{
+	m1, err = NewManager(nil, nEnv.Nets[1], &ManagerConfig{
 		PubKey:          pk1,
 		SecKey:          sk1,
 		DiscoveryClient: tpDisc,
 		LogStore:        ls1,
 	})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 
 	go m1.Serve(context.TODO())
 

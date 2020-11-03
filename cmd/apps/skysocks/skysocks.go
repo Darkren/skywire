@@ -5,7 +5,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"os"
 	"os/signal"
 
@@ -31,8 +30,8 @@ func main() {
 
 	skysocks.Log = log
 
-	if _, err := buildinfo.Get().WriteTo(os.Stdout); err != nil {
-		fmt.Printf("Failed to output build info: %v", err)
+	if _, err := buildinfo.Get().WriteTo(log.Writer()); err != nil {
+		log.Printf("Failed to output build info: %v", err)
 	}
 
 	var passcode = flag.String("passcode", "", "Authorize user against this passcode")
@@ -48,7 +47,7 @@ func main() {
 		log.Fatalf("Error listening network %v on port %d: %v\n", netType, port, err)
 	}
 
-	fmt.Println("Starting serving proxy server")
+	log.Infoln("Starting serving proxy server")
 
 	termCh := make(chan os.Signal, 1)
 	signal.Notify(termCh, os.Interrupt)
@@ -57,13 +56,11 @@ func main() {
 		<-termCh
 
 		if err := srv.Close(); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Fatalf("Failed to close server: %v", err)
 		}
 	}()
 
 	if err := srv.Serve(l); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 }

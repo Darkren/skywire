@@ -17,7 +17,7 @@ import (
 const ownerRWX = 0700
 
 // InitDmsgpty initializes dmsgpty.
-func InitDmsgpty(ctx context.Context, v *Visor) error {
+func InitDmsgpty(ctx context.Context, v *Visor) bool {
 	report := v.makeReporter("dmsgpty")
 	conf := v.conf.Dmsgpty
 
@@ -67,7 +67,7 @@ func InitDmsgpty(ctx context.Context, v *Visor) error {
 			}
 		}()
 
-		v.pushCloseStack("dmsgpty.serve", func() error {
+		v.pushCloseStack("dmsgpty.serve", func() bool {
 			cancel()
 			wg.Wait()
 			return report(nil)
@@ -97,11 +97,11 @@ func InitDmsgpty(ctx context.Context, v *Visor) error {
 			}
 		}()
 
-		v.pushCloseStack("dmsgpty.cli", func() error {
+		v.pushCloseStack("dmsgpty.cli", func() bool {
 			cancel()
-			err := report(cliL.Close())
+			ok := report(cliL.Close())
 			wg.Wait()
-			return err
+			return ok
 		})
 	}
 

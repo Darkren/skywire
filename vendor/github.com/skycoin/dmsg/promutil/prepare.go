@@ -1,13 +1,14 @@
 package promutil
 
 import (
-	"github.com/go-chi/chi"
+	"net/http"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // AddMetricsHandle adds a prometheus Handle at '/metrics' to the provided serve mux.
-func AddMetricsHandle(mux *chi.Mux, cs ...prometheus.Collector) {
+func AddMetricsHandle(mux *http.ServeMux, cs ...prometheus.Collector) {
 	reg := prometheus.NewPedanticRegistry()
 	reg.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
 	reg.MustRegister(prometheus.NewGoCollector())

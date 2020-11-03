@@ -55,15 +55,6 @@ var rootCmd = &cobra.Command{
 	Run: func(_ *cobra.Command, args []string) {
 		log := initLogger(tag, syslogAddr)
 
-		if discordWebhookURL := discord.GetWebhookURLFromEnv(); discordWebhookURL != "" {
-			// Workaround for Discord logger hook. Actually, it's Info.
-			log.Error(discord.StartLogMessage)
-			defer log.Error(discord.StopLogMessage)
-		} else {
-			log.Info(discord.StartLogMessage)
-			defer log.Info(discord.StopLogMessage)
-		}
-
 		delayDuration, err := time.ParseDuration(delay)
 		if err != nil {
 			log.WithError(err).Error("Failed to parse delay duration.")
@@ -118,7 +109,7 @@ var rootCmd = &cobra.Command{
 
 		v := visor.NewVisor(conf, restartCtx)
 
-		if err := v.Start(context.Background()); err != nil {
+		if ok := v.Start(context.Background()); !ok {
 			log.Fatal("Failed to start visor.")
 		}
 
@@ -154,8 +145,7 @@ func initLogger(tag string, syslogAddr string) *logging.MasterLogger {
 	}
 
 	if discordWebhookURL := discord.GetWebhookURLFromEnv(); discordWebhookURL != "" {
-		discordOpts := discord.GetDefaultOpts()
-		hook := discord.NewHook(tag, discordWebhookURL, discordOpts...)
+		hook := discord.NewHook(tag, discordWebhookURL)
 		log.AddHook(hook)
 	}
 
@@ -216,7 +206,7 @@ func initConfig(mLog *logging.MasterLogger, args []string, confPath string) *vis
 		}
 
 		if confPath == "" {
-			confPath = "/opt/skywire/" + defaultConfigName
+			confPath = defaultConfigName
 		}
 
 		fallthrough

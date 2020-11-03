@@ -26,12 +26,6 @@ type Server struct {
 
 // NewServer creates VPN server instance.
 func NewServer(cfg ServerConfig, l logrus.FieldLogger) (*Server, error) {
-	s := &Server{
-		cfg:   cfg,
-		log:   l,
-		ipGen: NewIPGenerator(),
-	}
-
 	defaultNetworkIfc, err := DefaultNetworkInterface()
 	if err != nil {
 		return nil, fmt.Errorf("error getting default network interface: %w", err)
@@ -51,11 +45,14 @@ func NewServer(cfg ServerConfig, l logrus.FieldLogger) (*Server, error) {
 	l.Infoln("Old IP forwarding values:")
 	l.Infof("IPv4: %s, IPv6: %s", ipv4ForwardingVal, ipv6ForwardingVal)
 
-	s.defaultNetworkInterface = defaultNetworkIfc
-	s.ipv4ForwardingVal = ipv4ForwardingVal
-	s.ipv6ForwardingVal = ipv6ForwardingVal
-
-	return s, nil
+	return &Server{
+		cfg:                     cfg,
+		log:                     l,
+		ipGen:                   NewIPGenerator(),
+		defaultNetworkInterface: defaultNetworkIfc,
+		ipv4ForwardingVal:       ipv4ForwardingVal,
+		ipv6ForwardingVal:       ipv6ForwardingVal,
+	}, nil
 }
 
 // Serve accepts connections from `l` and serves them.
@@ -226,39 +223,50 @@ func (s *Server) shakeHands(conn net.Conn) (tunIP, tunGateway net.IP, err error)
 		}
 	}
 
-	subnet, err := s.ipGen.Next()
-	if err != nil {
-		sHello.Status = HandshakeNoFreeIPs
-		if err := WriteJSON(conn, &sHello); err != nil {
-			s.log.WithError(err).Errorln("Error sending server hello")
+	var cTUNIP, cTUNGateway, sTUNIP, sTUNGateway net.IP
+	if cHello.ClientTUNIP == nil || cHello.ClientTUNGateway == nil ||
+		cHello.ServerTUNIP == nil || cHello.ServerTUNGateway == nil {
+		subnet, err := s.ipGen.Next()
+		if err != nil {
+			sHello.Status = HandshakeNoFreeIPs
+			if err := WriteJSON(conn, &sHello); err != nil {
+				s.log.WithError(err).Errorln("Error sending server hello")
+			}
+
+			return nil, nil, fmt.Errorf("error getting free subnet IP: %w", err)
 		}
 
-		return nil, nil, fmt.Errorf("error getting free subnet IP: %w", err)
-	}
+		subnetOctets, err := fetchIPv4Octets(subnet)
+		if err != nil {
+			sHello.Status = HandshakeStatusInternalError
+			if err := WriteJSON(conn, &sHello); err != nil {
+				s.log.WithError(err).Errorln("Error sending server hello")
+			}
 
-	subnetOctets, err := fetchIPv4Octets(subnet)
-	if err != nil {
-		sHello.Status = HandshakeStatusInternalError
-		if err := WriteJSON(conn, &sHello); err != nil {
-			s.log.WithError(err).Errorln("Error sending server hello")
+			return nil, nil, fmt.Errorf("error breaking IP into octets: %w", err)
 		}
 
-		return nil, nil, fmt.Errorf("error breaking IP into octets: %w", err)
+		// basically IP address comprised of `subnetOctets` items is the IP address of the subnet,
+		// we're going to work with. In this subnet we're giving 4 IP addresses: IP and gateway for
+		// the server-side TUN and IP and gateway for the client-side TUN. We do this as follows:
+		// - Server-side TUN gateway = subnet IP + 1
+		// - Server-side TUN IP = subnet IP + 2
+		// - Client-side TUN gateway = subnet IP + 3
+		// - Client-site TUN IP = subnet IP + 4
+
+		sTUNIP = net.IPv4(subnetOctets[0], subnetOctets[1], subnetOctets[2], subnetOctets[3]+2)
+		sTUNGateway = net.IPv4(subnetOctets[0], subnetOctets[1], subnetOctets[2], subnetOctets[3]+1)
+
+		cTUNIP = net.IPv4(subnetOctets[0], subnetOctets[1], subnetOctets[2], subnetOctets[3]+4)
+		cTUNGateway = net.IPv4(subnetOctets[0], subnetOctets[1], subnetOctets[2], subnetOctets[3]+3)
+	} else {
+		s.log.Info("GOT VPN CREDS, USING THE OLD PAIR")
+
+		cTUNIP = *cHello.ClientTUNIP
+		cTUNGateway = *cHello.ClientTUNGateway
+		sTUNIP = *cHello.ServerTUNIP
+		sTUNGateway = *cHello.ServerTUNGateway
 	}
-
-	// basically IP address comprised of `subnetOctets` items is the IP address of the subnet,
-	// we're going to work with. In this subnet we're giving 4 IP addresses: IP and gateway for
-	// the server-side TUN and IP and gateway for the client-side TUN. We do this as follows:
-	// - Server-side TUN gateway = subnet IP + 1
-	// - Server-side TUN IP = subnet IP + 2
-	// - Client-side TUN gateway = subnet IP + 3
-	// - Client-site TUN IP = subnet IP + 4
-
-	sTUNIP := net.IPv4(subnetOctets[0], subnetOctets[1], subnetOctets[2], subnetOctets[3]+2)
-	sTUNGateway := net.IPv4(subnetOctets[0], subnetOctets[1], subnetOctets[2], subnetOctets[3]+1)
-
-	cTUNIP := net.IPv4(subnetOctets[0], subnetOctets[1], subnetOctets[2], subnetOctets[3]+4)
-	cTUNGateway := net.IPv4(subnetOctets[0], subnetOctets[1], subnetOctets[2], subnetOctets[3]+3)
 
 	sHello.TUNIP = cTUNIP
 	sHello.TUNGateway = cTUNGateway

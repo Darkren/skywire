@@ -7,7 +7,6 @@ import (
 	"flag"
 	"io"
 	"net"
-	"os"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -55,7 +54,7 @@ func main() {
 
 	skysocks.Log = log
 
-	if _, err := buildinfo.Get().WriteTo(os.Stdout); err != nil {
+	if _, err := buildinfo.Get().WriteTo(log.Writer()); err != nil {
 		log.Printf("Failed to output build info: %v", err)
 	}
 

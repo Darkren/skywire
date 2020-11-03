@@ -21,8 +21,6 @@ import {
   FilterWindowData
 } from './skysocks-client-filter/skysocks-client-filter.component';
 import { countriesList } from 'src/app/utils/countries-list';
-import { SkysocksClientPasswordComponent } from './skysocks-client-password/skysocks-client-password.component';
-import { ClipboardService } from 'src/app/services/clipboard.service';
 
 /**
  * Data of the entries from the history.
@@ -45,10 +43,6 @@ export interface HistoryEntry {
    * Custom note added by the user.
    */
   note?: string;
-  /**
-   * If the user entered a password.
-   */
-  hasPassword?: boolean;
 }
 
 /**
@@ -127,7 +121,6 @@ export class SkysocksClientSettingsComponent implements OnInit, OnDestroy {
     private snackbarService: SnackbarService,
     private dialog: MatDialog,
     private proxyDiscoveryService: ProxyDiscoveryService,
-    private clipboardService: ClipboardService,
   ) {
     if (data.name.toLocaleLowerCase().indexOf('vpn') !== -1) {
       this.configuringVpn = true;
@@ -175,7 +168,6 @@ export class SkysocksClientSettingsComponent implements OnInit, OnDestroy {
         Validators.maxLength(66),
         Validators.pattern('^[0-9a-fA-F]+$')])
       ],
-      'password': ['', Validators.maxLength(100)]
     });
 
     setTimeout(() => (this.firstInput.nativeElement as HTMLElement).focus());
@@ -363,7 +355,7 @@ export class SkysocksClientSettingsComponent implements OnInit, OnDestroy {
 
     SelectOptionComponent.openDialog(this.dialog, options, 'common.options').afterClosed().subscribe((selectedOption: number) => {
       if (selectedOption === 1) {
-        this.useFromHistory(historyEntry);
+        this.saveChanges(historyEntry.key, historyEntry.enteredManually, historyEntry.location, historyEntry.note);
       } else if (selectedOption === 2) {
         this.changeNote(historyEntry);
       } else if (selectedOption === 3) {
@@ -415,44 +407,15 @@ export class SkysocksClientSettingsComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Makes the app use the data from a history entry.
-   * @param entry Entry to be used.
-   */
-  useFromHistory(entry: HistoryEntry) {
-    // If the entry was created without a password, use it inmediatelly.
-    if (!entry.hasPassword) {
-      this.saveChanges(entry.key, null, entry.enteredManually, entry.location, entry.note);
-    } else {
-      // If the entry was created with a password, ask for it.
-      SkysocksClientPasswordComponent.openDialog(this.dialog).afterClosed().subscribe((response: string) => {
-        if (response) {
-          // Remove the "-" char the modal window adds at the start of the password.
-          response = response.substr(1, response.length - 1);
-
-          this.saveChanges(entry.key, response, entry.enteredManually, entry.location, entry.note);
-        }
-      });
-    }
-  }
-
-  /**
    * Saves the settings. If no argument is provided, the function will take the public key
    * from the form and fill the rest of the data. The arguments are mainly for elements selected
    * from the discovery list and entries from the history.
    * @param publicKey New public key to be used.
-   * @param password New password to be used.
    * @param enteredManually If the user manually entered the data using the form.
    * @param location Location of the server.
    * @param note Personal note for the history.
    */
-  saveChanges(
-    publicKey: string = null,
-    password: string = null,
-    enteredManually: boolean = null,
-    location: string = null,
-    note: string = null
-  ) {
-
+  saveChanges(publicKey: string = null, enteredManually: boolean = null, location: string = null, note: string = null) {
     // If no public key was provided, the data will be retrieved from the form, so the form
     // must be valid. Also, the operation can not continue if the component is already working.
     if ((!this.form.valid && !publicKey) || this.working) {
@@ -460,7 +423,6 @@ export class SkysocksClientSettingsComponent implements OnInit, OnDestroy {
     }
 
     enteredManually = publicKey ? enteredManually : true;
-    password = publicKey ? password : this.form.get('password').value;
     publicKey = publicKey ? publicKey : this.form.get('pk').value;
 
     // Ask for confirmation.
@@ -468,49 +430,27 @@ export class SkysocksClientSettingsComponent implements OnInit, OnDestroy {
     const confirmationDialog = GeneralUtils.createConfirmationDialog(this.dialog, confirmationMsg);
     confirmationDialog.componentInstance.operationAccepted.subscribe(() => {
       confirmationDialog.close();
-      this.continueSavingChanges(publicKey, password, enteredManually, location, note);
+      this.continueSavingChanges(publicKey, enteredManually, location, note);
     });
   }
 
-  /**
-   * Copies a public key.
-   * @param publicKey Key to copy.
-   */
-  copyPk(publicKey: string) {
-    // Copy the key and inform the result.
-    if (this.clipboardService.copy(publicKey)) {
-      this.snackbarService.showDone('apps.vpn-socks-client-settings.copied-pk-info');
-    } else {
-      this.snackbarService.showError('apps.vpn-socks-client-settings.copy-pk-error');
-    }
-  }
-
   // Makes the call to the hypervisor API for changing the configuration.
-  private continueSavingChanges(publicKey: string, password: string, enteredManually: boolean, location: string, note: string) {
+  private continueSavingChanges(publicKey: string, enteredManually: boolean, location: string, note: string) {
     this.button.showLoading();
     this.working = true;
-
-    const data = { pk: publicKey };
-    if (this.configuringVpn) {
-      if (password) {
-        data['passcode'] = password;
-      } else {
-        data['passcode'] = '';
-      }
-    }
 
     this.operationSubscription = this.appsService.changeAppSettings(
       // The node pk is obtained from the currently openned node page.
       NodeComponent.getCurrentNodeKey(),
       this.data.name,
-      data,
+      { pk: publicKey },
     ).subscribe(
-      () => this.onSuccess(publicKey, !!password, enteredManually, location, note),
+      () => this.onSuccess(publicKey, enteredManually, location, note),
       err => this.onError(err),
     );
   }
 
-  private onSuccess(publicKey: string, hasPassword: boolean, enteredManually: boolean, location: string, note: string) {
+  private onSuccess(publicKey: string, enteredManually: boolean, location: string, note: string) {
     // Remove any repeated entry from the history.
     this.history = this.history.filter(value => value.key !== publicKey);
 
@@ -519,9 +459,6 @@ export class SkysocksClientSettingsComponent implements OnInit, OnDestroy {
       key: publicKey,
       enteredManually: enteredManually,
     };
-    if (hasPassword) {
-      newEntry.hasPassword = hasPassword;
-    }
     if (location) {
       newEntry.location = location;
     }
@@ -536,18 +473,13 @@ export class SkysocksClientSettingsComponent implements OnInit, OnDestroy {
       this.history.splice(this.history.length - itemsToRemove, itemsToRemove);
     }
 
-    // Update the form.
-    this.form.get('pk').setValue(publicKey);
-
     const dataToSave = JSON.stringify(this.history);
     localStorage.setItem(this.configuringVpn ? this.vpnHistoryStorageKey : this.socksHistoryStorageKey, dataToSave);
 
+    // Close the window.
     NodeComponent.refreshCurrentDisplayedData();
     this.snackbarService.showDone('apps.vpn-socks-client-settings.changes-made');
-
-    // Allow to continue using the component.
-    this.working = false;
-    this.button.reset();
+    this.dialogRef.close();
   }
 
   private onError(err: OperationError) {
