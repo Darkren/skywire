@@ -205,20 +205,24 @@ func (c *Client) Serve() error {
 		fmt.Printf("Failed to setup system privileges to clear up: %v\n", err)
 	}
 
+	// set 16mb buf
+	buf1 := make([]byte, 16*1024*1024)
+	buf2 := make([]byte, 16*1024*1024)
+
 	connToTunDoneCh := make(chan struct{})
 	tunToConnCh := make(chan struct{})
 	// read all system traffic and pass it to the remote VPN server
 	go func() {
 		defer close(connToTunDoneCh)
 
-		if _, err := io.Copy(tun, c.conn); err != nil {
+		if _, err := io.CopyBuffer(tun, c.conn, buf1); err != nil {
 			fmt.Printf("Error resending traffic from TUN %s to VPN server: %v\n", tun.Name(), err)
 		}
 	}()
 	go func() {
 		defer close(tunToConnCh)
 
-		if _, err := io.Copy(c.conn, tun); err != nil {
+		if _, err := io.CopyBuffer(c.conn, tun, buf2); err != nil {
 			fmt.Printf("Error resending traffic from VPN server to TUN %s: %v\n", tun.Name(), err)
 		}
 	}()
