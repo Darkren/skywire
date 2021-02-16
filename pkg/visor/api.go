@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -83,6 +84,7 @@ type Summary struct {
 	Apps            []*launcher.AppState `json:"apps"`
 	Transports      []*TransportSummary  `json:"transports"`
 	RoutesCount     int                  `json:"routes_count"`
+	OS              string               `json:"os"`
 }
 
 // Summary implements API.
@@ -107,6 +109,7 @@ func (v *Visor) Summary() (*Summary, error) {
 		Apps:            v.appL.AppStates(),
 		Transports:      summaries,
 		RoutesCount:     v.router.RoutesCount(),
+		OS:              runtime.GOOS,
 	}
 
 	return summary, nil
