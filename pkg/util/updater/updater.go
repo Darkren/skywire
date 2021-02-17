@@ -113,6 +113,22 @@ func (u *Updater) Update(updateConfig UpdateConfig) (updated bool, err error) {
 
 	u.status.Set("Started, checking update")
 
+	installedViaPackage, err := u.InstalledViaPackageInstaller()
+	if err != nil {
+		u.log.WithError(err).Errorln("FAILED TO CHECK IF PACKAGE INSTALLED")
+		return false, err
+	}
+
+	if installedViaPackage {
+		u.log.Infoln("INSTALLED VIA PACKAGE")
+		return u.updateWithPackage()
+	}
+
+	u.log.Infoln("INSTALLED MANUALLY")
+
+	// TODO (darkrengarius): remove
+	return true, nil
+
 	version, err := u.getVersion(updateConfig)
 	if err != nil {
 		return false, err

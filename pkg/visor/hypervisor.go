@@ -1198,6 +1198,11 @@ func (hv *Hypervisor) visorUpdateAvailable() http.HandlerFunc {
 			output.ReleaseURL = version.ReleaseURL()
 		}
 
+		// TODO (darkrengarius): remove
+		output.Available = true
+		output.AvailableVersion = "1.1.1"
+		output.ReleaseURL = "http://localhost"
+
 		httputil.WriteJSON(w, r, http.StatusOK, output)
 	})
 }

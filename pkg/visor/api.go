@@ -78,13 +78,14 @@ type HealthCheckable interface {
 
 // Summary provides a summary of a Skywire Visor.
 type Summary struct {
-	PubKey          cipher.PubKey        `json:"local_pk"`
-	BuildInfo       *buildinfo.Info      `json:"build_info"`
-	AppProtoVersion string               `json:"app_protocol_version"`
-	Apps            []*launcher.AppState `json:"apps"`
-	Transports      []*TransportSummary  `json:"transports"`
-	RoutesCount     int                  `json:"routes_count"`
-	OS              string               `json:"os"`
+	PubKey              cipher.PubKey        `json:"local_pk"`
+	BuildInfo           *buildinfo.Info      `json:"build_info"`
+	AppProtoVersion     string               `json:"app_protocol_version"`
+	Apps                []*launcher.AppState `json:"apps"`
+	Transports          []*TransportSummary  `json:"transports"`
+	RoutesCount         int                  `json:"routes_count"`
+	OS                  string               `json:"os"`
+	InstalledViaPackage bool                 `json:"installed_via_package"`
 }
 
 // Summary implements API.
@@ -102,14 +103,20 @@ func (v *Visor) Summary() (*Summary, error) {
 		return true
 	})
 
+	isInstalledViaPackage, err := v.updater.InstalledViaPackageInstaller()
+	if err != nil {
+		return nil, err
+	}
+
 	summary := &Summary{
-		PubKey:          v.conf.PK,
-		BuildInfo:       buildinfo.Get(),
-		AppProtoVersion: supportedProtocolVersion,
-		Apps:            v.appL.AppStates(),
-		Transports:      summaries,
-		RoutesCount:     v.router.RoutesCount(),
-		OS:              runtime.GOOS,
+		PubKey:              v.conf.PK,
+		BuildInfo:           buildinfo.Get(),
+		AppProtoVersion:     supportedProtocolVersion,
+		Apps:                v.appL.AppStates(),
+		Transports:          summaries,
+		RoutesCount:         v.router.RoutesCount(),
+		OS:                  runtime.GOOS,
+		InstalledViaPackage: isInstalledViaPackage,
 	}
 
 	return summary, nil
