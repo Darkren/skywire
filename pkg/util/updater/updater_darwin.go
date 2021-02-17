@@ -41,5 +41,7 @@ func (u *Updater) InstalledViaPackageInstaller() (bool, error) {
 }
 
 func (u *Updater) updateWithPackage() (bool, error) {
+	// we don't update it with package automatically,
+	// so just return false
 	return false, nil
 }
