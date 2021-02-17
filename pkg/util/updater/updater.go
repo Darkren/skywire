@@ -121,7 +121,8 @@ func (u *Updater) Update(updateConfig UpdateConfig) (updated bool, err error) {
 
 	if installedViaPackage {
 		u.log.Infoln("INSTALLED VIA PACKAGE")
-		return u.updateWithPackage()
+		return true, nil
+		//return u.updateWithPackage()
 	}
 
 	u.log.Infoln("INSTALLED MANUALLY")
