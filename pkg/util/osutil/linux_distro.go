@@ -87,5 +87,7 @@ func isPackageInstalledDebian(pkgName string) (bool, error) {
 
 	outputBytes = bytes.TrimSpace(outputBytes)
 
+	fmt.Printf("OUTPUT: %s\n", string(outputBytes))
+
 	return string(outputBytes) == pkgName, nil
 }

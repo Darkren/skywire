@@ -21,6 +21,8 @@ func (u *Updater) InstalledViaPackageInstaller() (bool, error) {
 		return false, fmt.Errorf("failed to detect distro")
 	}
 
+	u.log.Infof("DISTRO: %v", distro)
+
 	if !osutil.PackageUpdateSupported(distro) {
 		return false, nil
 	}
