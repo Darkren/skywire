@@ -66,7 +66,7 @@ func PackageUpdateSupported(d LinuxDistro) bool {
 
 // IsPackageInstalled checks if package `pkgName` is installed with package for distro `d`.
 func IsPackageInstalled(d LinuxDistro, pkgName string) (bool, error) {
-	if PackageUpdateSupported(d) {
+	if !PackageUpdateSupported(d) {
 		return false, fmt.Errorf("package update is not supported")
 	}
 
