@@ -49,10 +49,10 @@ func DetectLinuxDistro() (LinuxDistro, error) {
 
 	outputBytes = bytes.TrimSpace(outputBytes)
 	if bytes.Contains(outputBytes, []byte("command not found")) {
-		return LinuxDistroDebian, nil
+		return LinuxDistroUnknown, nil
 	}
 
-	return LinuxDistroUnknown, nil
+	return LinuxDistroDebian, nil
 }
 
 // PackageUpdateSupported checks if package update is supported for distro `d`.
