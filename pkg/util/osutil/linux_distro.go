@@ -45,6 +45,8 @@ func DetectLinuxDistro() (LinuxDistro, error) {
 		return LinuxDistroUnknown, fmt.Errorf("failed to read stdout: %w", err)
 	}
 
+	fmt.Printf("DISTRO OUTPUT: %s\n", string(outputBytes))
+
 	outputBytes = bytes.TrimSpace(outputBytes)
 	if bytes.Contains(outputBytes, []byte("command not found")) {
 		return LinuxDistroDebian, nil
