@@ -5,7 +5,6 @@ package updater
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"path/filepath"
 
 	"github.com/skycoin/skywire/pkg/util/osutil"
@@ -19,14 +18,9 @@ const (
 // InstalledViaPackageInstaller checks if the visor is installed via package installer.
 func (u *Updater) InstalledViaPackageInstaller() (bool, error) {
 	cmd := "/usr/sbin/pkgutil --pkgs=" + packageInstallationName
-	output, err := osutil.RunWithResult("sh", "-c", cmd)
+	outputBytes, err := osutil.RunWithResult("sh", "-c", cmd)
 	if err != nil {
 		return false, fmt.Errorf("failed to execute command %s: %w", cmd, err)
-	}
-
-	outputBytes, err := ioutil.ReadAll(output)
-	if err != nil {
-		return false, fmt.Errorf("failed to read stdout: %w", err)
 	}
 
 	outputBytes = bytes.TrimSpace(outputBytes)

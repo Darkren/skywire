@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"runtime"
 )
 
@@ -35,15 +34,9 @@ func DetectLinuxDistro() (LinuxDistro, error) {
 		return LinuxDistroUnknown, errFuncNotSupported
 	}
 
-	cmd := "apt -v"
-	output, err := RunWithResult("apt", "-v")
+	outputBytes, err := RunWithResult("apt", "-v")
 	if err != nil {
-		return LinuxDistroUnknown, fmt.Errorf("failed to execute command %s: %w", cmd, err)
-	}
-
-	outputBytes, err := ioutil.ReadAll(output)
-	if err != nil {
-		return LinuxDistroUnknown, fmt.Errorf("failed to read stdout: %w", err)
+		return LinuxDistroUnknown, err
 	}
 
 	fmt.Printf("DISTRO OUTPUT: %s\n", string(outputBytes))
@@ -80,14 +73,9 @@ func isPackageInstalledUnknown(_ string) (bool, error) {
 
 func isPackageInstalledDebian(pkgName string) (bool, error) {
 	cmd := "dpkg --get-selections | grep -v deinstall | grep skywire | awk '{print $1}'"
-	output, err := RunWithResult("sh", "-c", cmd)
+	outputBytes, err := RunWithResult("sh", "-c", cmd)
 	if err != nil {
 		return false, fmt.Errorf("failed to execute command %s: %w", cmd, err)
-	}
-
-	outputBytes, err := ioutil.ReadAll(output)
-	if err != nil {
-		return false, fmt.Errorf("failed to read stdout: %w", err)
 	}
 
 	outputBytes = bytes.TrimSpace(outputBytes)
