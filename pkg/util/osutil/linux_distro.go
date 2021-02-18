@@ -31,6 +31,7 @@ var (
 // DetectLinuxDistro detects current Linux distribution.
 func DetectLinuxDistro() (LinuxDistro, error) {
 	if runtime.GOOS != "linux" {
+		fmt.Println("GOOS NOT LINUX")
 		return LinuxDistroUnknown, errFuncNotSupported
 	}
 
@@ -49,9 +50,11 @@ func DetectLinuxDistro() (LinuxDistro, error) {
 
 	outputBytes = bytes.TrimSpace(outputBytes)
 	if bytes.Contains(outputBytes, []byte("command not found")) {
+		fmt.Println("RETURNING UNKNOWN")
 		return LinuxDistroUnknown, nil
 	}
 
+	fmt.Println("RETURNING DEBIAN")
 	return LinuxDistroDebian, nil
 }
 
