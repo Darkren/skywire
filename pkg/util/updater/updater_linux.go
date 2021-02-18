@@ -28,8 +28,12 @@ func (u *Updater) InstalledViaPackageInstaller() (bool, error) {
 	}
 
 	isInstalled, err := osutil.IsPackageInstalled(distro, packageInstallationName)
-	if !isInstalled {
+	if err != nil {
 		return false, fmt.Errorf("failed to check if package is installed: %w", err)
+	}
+
+	if !isInstalled {
+		return false, nil
 	}
 
 	binaryPath := filepath.Join(filepath.Dir(u.restartCtx.CmdPath()), visorBinary)
