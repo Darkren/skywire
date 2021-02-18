@@ -3,9 +3,7 @@
 package updater
 
 import (
-	"bytes"
 	"fmt"
-	"io/ioutil"
 	"path/filepath"
 
 	"github.com/skycoin/skywire/pkg/util/osutil"
@@ -18,21 +16,18 @@ const (
 
 // InstalledViaPackageInstaller checks if the visor is installed via package installer.
 func (u *Updater) InstalledViaPackageInstaller() (bool, error) {
-	cmd := "dpkg --get-selections | grep -v deinstall | grep skywire | awk '{print $1}'"
-	output, err := osutil.RunWithResult("sh", "-c", cmd)
+	distro, err := osutil.DetectLinuxDistro()
 	if err != nil {
-		return false, fmt.Errorf("failed to execute command %s: %w", cmd, err)
+		return false, fmt.Errorf("failed to detect distro")
 	}
 
-	outputBytes, err := ioutil.ReadAll(output)
-	if err != nil {
-		return false, fmt.Errorf("failed to read stdout: %w", err)
-	}
-
-	outputBytes = bytes.TrimSpace(outputBytes)
-
-	if string(outputBytes) != packageInstallationName {
+	if !osutil.PackageUpdateSupported(distro) {
 		return false, nil
+	}
+
+	isInstalled, err := osutil.IsPackageInstalled(distro, packageInstallationName)
+	if !isInstalled {
+		return false, fmt.Errorf("failed to check if package is installed: %w", err)
 	}
 
 	binaryPath := filepath.Join(filepath.Dir(u.restartCtx.CmdPath()), visorBinary)
