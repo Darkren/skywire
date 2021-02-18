@@ -49,12 +49,8 @@ func run(bin string, stdout io.Writer, args ...string) error {
 	cmd.Stdin = os.Stdin
 
 	if err := cmd.Run(); err != nil {
-		stdErr := stderrBuf.Bytes()
-		fmt.Printf("CMD ERROR: %v: %s\n", err, string(stdErr))
 		return NewErrorWithStderr(fmt.Errorf("error running command \"%s\": %w", fullCmd, err),
-			stdErr)
-		/*return NewErrorWithStderr(fmt.Errorf("error running command \"%s\": %w", fullCmd, err),
-		stderrBuf.Bytes())*/
+			stderrBuf.Bytes())
 	}
 
 	return nil
