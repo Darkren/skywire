@@ -43,6 +43,9 @@ func (u *Updater) InstalledViaPackageInstaller() (bool, error) {
 
 func (u *Updater) updateWithPackage() (bool, error) {
 	uid, err := osutil.GainRoot()
+	if err != nil {
+		return false, fmt.Errorf("failed to gain root: %w", err)
+	}
 	defer osutil.ReleaseRoot(uid)
 
 	cmd := "apt-get update && apt-get install --only-upgrade skywire"
