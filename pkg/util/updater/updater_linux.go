@@ -42,7 +42,13 @@ func (u *Updater) InstalledViaPackageInstaller() (bool, error) {
 }
 
 func (u *Updater) updateWithPackage() (bool, error) {
-	// we don't update it with package automatically,
-	// so just return false
-	return false, nil
+	uid, err := osutil.GainRoot()
+	defer osutil.ReleaseRoot(uid)
+
+	cmd := "apt-get update && apt-get install --only-upgrade skywire"
+	if err := osutil.Run("sh", "-c", cmd); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
