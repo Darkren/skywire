@@ -49,3 +49,4 @@ cmd/skywirevisormobile/android/app/skywire-sources.jar
 cmd/skywirevisormobile/android/app/.idea
 cmd/skywirevisormobile/android/app/build
 cmd/skywirevisormobile/android/.gradle
+cmd/skywirevisormobile/android/local.properties
