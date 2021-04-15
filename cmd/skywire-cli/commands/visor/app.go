@@ -1,12 +1,15 @@
 package visor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/skycoin/dmsg/cipher"
 
 	"github.com/spf13/cobra"
 
@@ -21,8 +24,47 @@ func init() {
 		stopAppCmd,
 		setAppAutostartCmd,
 		appLogsSinceCmd,
+		setAppArgCmd,
 		execCmd,
 	)
+}
+
+var setAppArgCmd = &cobra.Command{
+	Use:   "set-app-arg",
+	Short: "Sets app argument",
+	Args:  cobra.MinimumNArgs(1),
+	Run: func(_ *cobra.Command, args []string) {
+		appArgTokens := strings.Split(args[0], ":")
+		if len(appArgTokens) != 2 {
+			internal.Catch(errors.New("invalid argument format"))
+		}
+
+		argTokens := strings.Split(appArgTokens[1], "=")
+		if len(argTokens) != 2 {
+			internal.Catch(errors.New("invalid argument format"))
+		}
+
+		appName := appArgTokens[0]
+		argName := argTokens[0]
+		argVal := argTokens[1]
+
+		var err error
+		switch argName {
+		case "passcode":
+			internal.Catch(err)
+		case "secure":
+			err = rpcClient().SetAppSecure(appName, argVal == "true")
+		case "killswitch":
+			err = rpcClient().SetAppKillswitch(appName, argVal == "true")
+		case "pk", "srv":
+			var pk cipher.PubKey
+			err = pk.Set(argVal)
+			internal.Catch(err)
+
+			err = rpcClient().SetAppPK(appName, pk)
+		}
+		internal.Catch(err)
+	},
 }
 
 var lsAppsCmd = &cobra.Command{
