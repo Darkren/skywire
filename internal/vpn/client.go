@@ -20,6 +20,7 @@ import (
 	"github.com/skycoin/skywire/pkg/app/appnet"
 	"github.com/skycoin/skywire/pkg/routing"
 	"github.com/skycoin/skywire/pkg/skyenv"
+	skynetutil "github.com/skycoin/skywire/pkg/util/netutil"
 )
 
 const (
@@ -187,18 +188,25 @@ func (c *Client) Serve() error {
 
 	c.setAppStatus(ClientStatusConnecting)
 
-	for {
-		if err := c.dialServeConn(); err != nil {
-			fmt.Printf("dialServeConn: %v\n", err)
-		}
-
+	r := netutil.NewDefaultRetrier(c.log)
+	err := r.Do(context.Background(), func() error {
 		if c.isClosed() {
 			return nil
 		}
 
-		c.setAppStatus(ClientStatusReconnecting)
-		fmt.Println("Connection broke, reconnecting...")
+		if err := c.dialServeConn(); err != nil {
+			c.setAppStatus(ClientStatusReconnecting)
+			fmt.Println("Connection broke, reconnecting...")
+			return fmt.Errorf("dialServeConn: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to connect to the server: %w", err)
 	}
+
+	return nil
 }
 
 // Close closes client.
@@ -227,11 +235,7 @@ func (c *Client) AddDirectRoute(ip net.IP) error {
 	}
 	defer c.releaseSysPrivileges()
 
-	if err := c.setupDirectRoute(ip); err != nil {
-		return err
-	}
-
-	return nil
+	return c.setupDirectRoute(ip)
 }
 
 // RemoveDirectRoute removes direct route. Packets destined to `ip` will
@@ -631,7 +635,7 @@ func stcpEntitiesFromEnv() ([]net.IP, error) {
 }
 
 func (c *Client) shakeHands(conn net.Conn) (TUNIP, TUNGateway net.IP, err error) {
-	unavailableIPs, err := LocalNetworkInterfaceIPs()
+	unavailableIPs, err := skynetutil.LocalNetworkInterfaceIPs()
 	if err != nil {
 		return nil, nil, fmt.Errorf("error getting unavailable private IPs: %w", err)
 	}

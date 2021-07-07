@@ -2,8 +2,10 @@ package commands
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"net/http"
 	_ "net/http/pprof" // nolint:gosec // https://golang.org/doc/diagnostics.html#profiling
@@ -11,34 +13,30 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
-	"github.com/getlantern/systray"
 	"github.com/pkg/profile"
 	"github.com/skycoin/dmsg/buildinfo"
 	"github.com/skycoin/dmsg/cmdutil"
-	"github.com/skycoin/dmsg/discord"
 	"github.com/skycoin/skycoin/src/util/logging"
 	"github.com/spf13/cobra"
 	"github.com/toqueteos/webbrowser"
 
-	"github.com/skycoin/skywire/internal/gui"
 	"github.com/skycoin/skywire/pkg/restart"
 	"github.com/skycoin/skywire/pkg/syslog"
 	"github.com/skycoin/skywire/pkg/visor"
+	"github.com/skycoin/skywire/pkg/visor/logstore"
 	"github.com/skycoin/skywire/pkg/visor/visorconfig"
 )
+
+var uiAssets fs.FS
 
 var restartCtx = restart.CaptureContext()
 
 const (
-	defaultConfigName = "skywire-config.json"
-)
-
-var (
-	stopVisorWg sync.WaitGroup
+	defaultConfigName    = "skywire-config.json"
+	runtimeLogMaxEntries = 300
 )
 
 var (
@@ -48,59 +46,22 @@ var (
 	pprofAddr     string
 	confPath      string
 	delay         string
-	runSysTrayApp bool
 	launchBrowser bool
 )
-
-func init() {
-	rootCmd.Flags().StringVar(&tag, "tag", "skywire", "logging tag")
-	rootCmd.Flags().StringVar(&syslogAddr, "syslog", "", "syslog server address. E.g. localhost:514")
-	rootCmd.Flags().StringVarP(&pprofMode, "pprofmode", "p", "", "pprof profiling mode. Valid values: cpu, mem, mutex, block, trace, http")
-	rootCmd.Flags().StringVar(&pprofAddr, "pprofaddr", "localhost:6060", "pprof http port if mode is 'http'")
-	rootCmd.Flags().StringVarP(&confPath, "config", "c", "", "config file location. If the value is 'STDIN', config file will be read from stdin.")
-	rootCmd.Flags().StringVar(&delay, "delay", "0ns", "start delay (deprecated)") // deprecated
-	rootCmd.Flags().BoolVar(&runSysTrayApp, "systray", false, "Run system tray app")
-	rootCmd.Flags().BoolVar(&launchBrowser, "launch-browser", false, "open hypervisor web ui (hypervisor only) with system browser")
-}
 
 var rootCmd = &cobra.Command{
 	Use:   "skywire-visor",
 	Short: "Skywire visor",
 	Run: func(_ *cobra.Command, args []string) {
-		if runSysTrayApp {
-			l := logging.MustGetLogger("sys_tray_setup")
-
-			sysTrayIcon, err := gui.ReadSysTrayIcon()
-			if err != nil {
-				l.WithError(err).Fatalln("Failed to read system tray icon")
-			}
-
-			go func() {
-				runVisor(args)
-				gui.Stop()
-			}()
-
-			systray.Run(gui.GetOnGUIReady(sysTrayIcon), gui.OnGUIQuit)
-
-			return
-		}
-
-		runVisor(args)
+		runApp(args...)
 	},
 	Version: buildinfo.Version(),
 }
 
 func runVisor(args []string) {
 	log := initLogger(tag, syslogAddr)
-
-	if discordWebhookURL := discord.GetWebhookURLFromEnv(); discordWebhookURL != "" {
-		// Workaround for Discord logger hook. Actually, it's Info.
-		log.Error(discord.StartLogMessage)
-		defer log.Error(discord.StopLogMessage)
-	} else {
-		log.Info(discord.StartLogMessage)
-		defer log.Info(discord.StopLogMessage)
-	}
+	store, hook := logstore.MakeStore(runtimeLogMaxEntries)
+	log.AddHook(hook)
 
 	delayDuration, err := time.ParseDuration(delay)
 	if err != nil {
@@ -156,22 +117,19 @@ func runVisor(args []string) {
 	v, ok := visor.NewVisor(conf, restartCtx)
 	if !ok {
 		log.Errorln("Failed to start visor.")
-		systray.Quit()
+		quitSystray()
 		return
 	}
+	v.SetLogstore(store)
 
 	if launchBrowser {
 		runBrowser(conf, log)
 	}
 
-	stopVisorWg.Add(1)
-	defer stopVisorWg.Done()
-
 	ctx, cancel := cmdutil.SignalContext(context.Background(), log)
-	gui.SetStopVisorFn(func() {
-		cancel()
-		stopVisorWg.Wait()
-	})
+	go func() {
+		stopSystray(cancel)
+	}()
 	defer cancel()
 
 	// Wait.
@@ -183,7 +141,15 @@ func runVisor(args []string) {
 }
 
 // Execute executes root CLI command.
-func Execute() {
+func Execute(ui embed.FS) {
+	uiFS, err := fs.Sub(ui, "static")
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	uiAssets = uiFS
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
 	}
@@ -200,12 +166,6 @@ func initLogger(tag string, syslogAddr string) *logging.MasterLogger {
 			log.AddHook(hook)
 			log.Out = ioutil.Discard
 		}
-	}
-
-	if discordWebhookURL := discord.GetWebhookURLFromEnv(); discordWebhookURL != "" {
-		discordOpts := discord.GetDefaultOpts()
-		hook := discord.NewHook(tag, discordWebhookURL, discordOpts...)
-		log.AddHook(hook)
 	}
 
 	return log
@@ -297,6 +257,10 @@ func initConfig(mLog *logging.MasterLogger, args []string, confPath string) *vis
 	conf, err := visorconfig.Parse(mLog, confPath, raw)
 	if err != nil {
 		log.WithError(err).Fatal("Failed to parse config.")
+	}
+
+	if conf.Hypervisor != nil {
+		conf.Hypervisor.UIAssets = uiAssets
 	}
 
 	return conf

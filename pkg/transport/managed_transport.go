@@ -36,20 +36,22 @@ var (
 
 // Constants associated with transport redial loop.
 const (
-	tpInitBO = time.Millisecond * 500
-	tpMaxBO  = time.Minute
-	tpTries  = 0
-	tpFactor = 2
+	tpInitBO  = time.Millisecond * 500
+	tpMaxBO   = time.Minute
+	tpTries   = 0
+	tpFactor  = 2
+	tpTimeout = time.Second * 3 // timeout for a single try
 )
 
 // ManagedTransportConfig is a configuration for managed transport.
 type ManagedTransportConfig struct {
-	Net         *snet.Network
-	DC          DiscoveryClient
-	LS          LogStore
-	RemotePK    cipher.PubKey
-	NetName     string
-	AfterClosed TPCloseCallback
+	Net            *snet.Network
+	DC             DiscoveryClient
+	LS             LogStore
+	RemotePK       cipher.PubKey
+	NetName        string
+	AfterClosed    TPCloseCallback
+	TransportLabel Label
 }
 
 // ManagedTransport manages a direct line of communication between two visor nodes.
@@ -91,7 +93,11 @@ type ManagedTransport struct {
 }
 
 // NewManagedTransport creates a new ManagedTransport.
-func NewManagedTransport(conf ManagedTransportConfig) *ManagedTransport {
+func NewManagedTransport(conf ManagedTransportConfig, isInitiator bool) *ManagedTransport {
+	initiator, target := conf.Net.LocalPK(), conf.RemotePK
+	if !isInitiator {
+		initiator, target = target, initiator
+	}
 	mt := &ManagedTransport{
 		log:         logging.MustGetLogger(fmt.Sprintf("tp:%s", conf.RemotePK.String()[:6])),
 		rPK:         conf.RemotePK,
@@ -99,7 +105,7 @@ func NewManagedTransport(conf ManagedTransportConfig) *ManagedTransport {
 		n:           conf.Net,
 		dc:          conf.DC,
 		ls:          conf.LS,
-		Entry:       makeEntry(conf.Net.LocalPK(), conf.RemotePK, conf.NetName),
+		Entry:       MakeEntry(initiator, target, conf.NetName, true, conf.TransportLabel),
 		LogEntry:    new(LogEntry),
 		connCh:      make(chan struct{}, 1),
 		done:        make(chan struct{}),
@@ -203,8 +209,8 @@ func (mt *ManagedTransport) Serve(readCh chan<- routing.Packet) {
 				continue
 			}
 
-			// Only least significant edge is responsible for redialing.
-			if !mt.isLeastSignificantEdge() {
+			// Only initiator is responsible for redialing.
+			if !mt.isInitiator() {
 				continue
 			}
 
@@ -370,9 +376,11 @@ func (mt *ManagedTransport) redialLoop(ctx context.Context) error {
 
 	// Only redial when there is no underlying conn.
 	return retry.Do(ctx, func() (err error) {
+		tryCtx, cancel := context.WithTimeout(ctx, tpTimeout)
+		defer cancel()
 		mt.connMx.Lock()
 		if mt.conn == nil {
-			err = mt.redial(ctx)
+			err = mt.redial(tryCtx)
 		}
 		mt.connMx.Unlock()
 		return err
@@ -380,6 +388,11 @@ func (mt *ManagedTransport) redialLoop(ctx context.Context) error {
 }
 
 func (mt *ManagedTransport) isLeastSignificantEdge() bool {
+	sorted := SortEdges(mt.Entry.Edges[0], mt.Entry.Edges[1])
+	return sorted[0] == mt.n.LocalPK()
+}
+
+func (mt *ManagedTransport) isInitiator() bool {
 	return mt.Entry.EdgeIndex(mt.n.LocalPK()) == 0
 }
 

@@ -62,7 +62,6 @@ type Hypervisor struct {
 	c            hypervisorconfig.Config
 	visor        *Visor
 	dmsgC        *dmsg.Client
-	assets       http.FileSystem        // web UI
 	visors       map[cipher.PubKey]Conn // connected remote visors
 	trackers     *dmsgtracker.Manager   // dmsg trackers
 	users        *usermanager.UserManager
@@ -73,7 +72,7 @@ type Hypervisor struct {
 }
 
 // New creates a new Hypervisor.
-func New(config hypervisorconfig.Config, assets http.FileSystem, visor *Visor, dmsgC *dmsg.Client) (*Hypervisor, error) {
+func New(config hypervisorconfig.Config, visor *Visor, dmsgC *dmsg.Client) (*Hypervisor, error) {
 	config.Cookies.TLS = config.EnableTLS
 
 	boltUserDB, err := usermanager.NewBoltUserStore(config.DBPath)
@@ -93,7 +92,6 @@ func New(config hypervisorconfig.Config, assets http.FileSystem, visor *Visor, d
 		c:            config,
 		visor:        visor,
 		dmsgC:        dmsgC,
-		assets:       assets,
 		visors:       make(map[cipher.PubKey]Conn),
 		trackers:     dmsgtracker.NewDmsgTrackerManager(nil, dmsgC, 0, 0),
 		users:        usermanager.NewUserManager(singleUserDB, config.Cookies),
@@ -120,7 +118,9 @@ func (hv *Hypervisor) ServeRPC(ctx context.Context, dmsgPort uint16) error {
 	}
 
 	// setup
+	hv.mu.Lock()
 	hv.selfConn.PtyUI = setupDmsgPtyUI(hv.dmsgC, hv.c.PK)
+	hv.mu.Unlock()
 
 	for {
 		conn, err := lis.AcceptStream()
@@ -228,6 +228,7 @@ func (hv *Hypervisor) makeMux() chi.Router {
 				r.Get("/dmsg", hv.getDmsg())
 
 				r.Get("/visors", hv.getVisors())
+				r.Get("/visors-summary", hv.getAllVisorsSummary())
 				r.Get("/visors/{pk}", hv.getVisor())
 				r.Get("/visors/{pk}/summary", hv.getVisorSummary())
 				r.Get("/visors/{pk}/health", hv.getHealth())
@@ -236,6 +237,7 @@ func (hv *Hypervisor) makeMux() chi.Router {
 				r.Get("/visors/{pk}/apps/{app}", hv.getApp())
 				r.Put("/visors/{pk}/apps/{app}", hv.putApp())
 				r.Get("/visors/{pk}/apps/{app}/logs", hv.appLogsSince())
+				r.Get("/visors/{pk}/apps/{app}/stats", hv.getAppStats())
 				r.Get("/visors/{pk}/apps/{app}/connections", hv.appConnections())
 				r.Get("/visors/{pk}/transport-types", hv.getTransportTypes())
 				r.Get("/visors/{pk}/transports", hv.getTransports())
@@ -257,6 +259,8 @@ func (hv *Hypervisor) makeMux() chi.Router {
 				r.Get("/visors/{pk}/update/ws/running", hv.isVisorWSUpdateRunning())
 				r.Get("/visors/{pk}/update/available", hv.visorUpdateAvailable())
 				r.Get("/visors/{pk}/update/available/{channel}", hv.visorUpdateAvailable())
+				r.Get("/visors/{pk}/runtime-logs", hv.getRuntimeLogs())
+				r.Post("/visors/{pk}/min-hops", hv.postMinHops())
 			})
 		})
 
@@ -271,7 +275,7 @@ func (hv *Hypervisor) makeMux() chi.Router {
 			})
 		}
 
-		r.Handle("/*", http.FileServer(hv.assets))
+		r.Handle("/*", http.FileServer(http.FS(hv.c.UIAssets)))
 	})
 
 	return r
@@ -381,13 +385,7 @@ func (hv *Hypervisor) getUptime() http.HandlerFunc {
 	})
 }
 
-type summaryResp struct {
-	TCPAddr string `json:"tcp_addr"`
-	Online  bool   `json:"online"`
-	*Summary
-}
-
-// provides summary of all visors.
+// provides overview of all visors.
 func (hv *Hypervisor) getVisors() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hv.mu.RLock()
@@ -399,22 +397,122 @@ func (hv *Hypervisor) getVisors() http.HandlerFunc {
 			i++
 		}
 
-		summaries := make([]summaryResp, len(hv.visors)+i)
+		overviews := make([]Overview, len(hv.visors)+i)
 
 		if hv.visor != nil {
-			summary, err := hv.visor.Summary()
+			overview, err := hv.visor.Overview()
 			if err != nil {
-				log.WithError(err).Warn("Failed to obtain summary of this visor.")
-				summary = &Summary{PubKey: hv.visor.conf.PK}
+				log.WithError(err).Warn("Failed to obtain overview of this visor.")
+				overview = &Overview{PubKey: hv.visor.conf.PK}
 			}
 
-			addr := dmsg.Addr{PK: hv.c.PK, Port: hv.c.DmsgPort}
-			summaries[0] = summaryResp{
-				TCPAddr: addr.String(),
-				Online:  err == nil,
-				Summary: summary,
+			overviews[0] = *overview
+		}
+
+		for pk, c := range hv.visors {
+			go func(pk cipher.PubKey, c Conn, i int) {
+				log := hv.log(r).
+					WithField("visor_addr", c.Addr).
+					WithField("func", "getVisors")
+
+				log.Debug("Requesting overview via RPC.")
+
+				overview, err := c.API.Overview()
+				if err != nil {
+					log.WithError(err).
+						Warn("Failed to obtain overview via RPC.")
+					overview = &Overview{PubKey: pk}
+				} else {
+					log.Debug("Obtained overview via RPC.")
+				}
+				overviews[i] = *overview
+				wg.Done()
+			}(pk, c, i)
+			i++
+		}
+
+		wg.Wait()
+		hv.mu.RUnlock()
+
+		httputil.WriteJSON(w, r, http.StatusOK, overviews)
+	}
+}
+
+// provides overview of single visor.
+func (hv *Hypervisor) getVisor() http.HandlerFunc {
+	return hv.withCtx(hv.visorCtx, func(w http.ResponseWriter, r *http.Request, ctx *httpCtx) {
+		overview, err := ctx.API.Overview()
+		if err != nil {
+			httputil.WriteJSON(w, r, http.StatusInternalServerError, err)
+			return
+		}
+
+		httputil.WriteJSON(w, r, http.StatusOK, overview)
+	})
+}
+
+// provides extra summary of single visor.
+func (hv *Hypervisor) getVisorSummary() http.HandlerFunc {
+	return hv.withCtx(hv.visorCtx, func(w http.ResponseWriter, r *http.Request, ctx *httpCtx) {
+		summary, err := ctx.API.Summary()
+		if err != nil {
+			httputil.WriteJSON(w, r, http.StatusInternalServerError, err)
+			return
+		}
+
+		dmsgStats := make(map[string]dmsgtracker.DmsgClientSummary)
+		dSummary := hv.getDmsgSummary()
+		for _, stat := range dSummary {
+			dmsgStats[stat.PK.String()] = stat
+		}
+
+		if stat, ok := dmsgStats[summary.Overview.PubKey.String()]; ok {
+			summary.DmsgStats = &stat
+		} else {
+			summary.DmsgStats = &dmsgtracker.DmsgClientSummary{}
+		}
+		httputil.WriteJSON(w, r, http.StatusOK, summary)
+	})
+}
+
+func makeSummaryResp(online, hyper bool, sum *Summary) Summary {
+	sum.Online = online
+	sum.IsHypervisor = hyper
+	return *sum
+}
+
+func (hv *Hypervisor) getAllVisorsSummary() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		hv.mu.RLock()
+		wg := new(sync.WaitGroup)
+		wg.Add(len(hv.visors))
+
+		i := 1
+
+		dmsgStats := make(map[string]dmsgtracker.DmsgClientSummary)
+		wg.Add(1)
+		go func() {
+			summary := hv.getDmsgSummary()
+			for _, stat := range summary {
+				dmsgStats[stat.PK.String()] = stat
+			}
+			wg.Done()
+		}()
+
+		summaries := make([]Summary, len(hv.visors)+i)
+
+		summary, err := hv.visor.Summary()
+		if err != nil {
+			log.WithError(err).Warn("Failed to obtain summary of this visor.")
+			summary = &Summary{
+				Overview: &Overview{
+					PubKey: hv.visor.conf.PK,
+				},
+				Health: &HealthInfo{},
 			}
 		}
+
+		summaries[0] = makeSummaryResp(err == nil, true, summary)
 
 		for pk, c := range hv.visors {
 			go func(pk cipher.PubKey, c Conn, i int) {
@@ -427,66 +525,37 @@ func (hv *Hypervisor) getVisors() http.HandlerFunc {
 				summary, err := c.API.Summary()
 				if err != nil {
 					log.WithError(err).
-						Warn("Failed to obtain summary via RPC.")
-					summary = &Summary{PubKey: pk}
+						Warn("Failed to obtain summary via RPC.", pk)
+
+					summary = &Summary{
+						Overview: &Overview{
+							PubKey: pk,
+						},
+						Health: &HealthInfo{},
+					}
 				} else {
 					log.Debug("Obtained summary via RPC.")
 				}
-				summaries[i] = summaryResp{
-					TCPAddr: c.Addr.String(),
-					Online:  err == nil,
-					Summary: summary,
-				}
+				resp := makeSummaryResp(err == nil, false, summary)
+				summaries[i] = resp
 				wg.Done()
 			}(pk, c, i)
 			i++
 		}
 
 		wg.Wait()
+		for i := 0; i < len(summaries); i++ {
+			if stat, ok := dmsgStats[summaries[i].Overview.PubKey.String()]; ok {
+				summaries[i].DmsgStats = &stat
+			} else {
+				summaries[i].DmsgStats = &dmsgtracker.DmsgClientSummary{}
+			}
+		}
+
 		hv.mu.RUnlock()
 
 		httputil.WriteJSON(w, r, http.StatusOK, summaries)
 	}
-}
-
-// provides summary of single visor.
-func (hv *Hypervisor) getVisor() http.HandlerFunc {
-	return hv.withCtx(hv.visorCtx, func(w http.ResponseWriter, r *http.Request, ctx *httpCtx) {
-		summary, err := ctx.API.Summary()
-		if err != nil {
-			httputil.WriteJSON(w, r, http.StatusInternalServerError, err)
-			return
-		}
-
-		httputil.WriteJSON(w, r, http.StatusOK, summaryResp{
-			TCPAddr: ctx.Addr.String(),
-			Summary: summary,
-		})
-	})
-}
-
-type extraSummaryResp struct {
-	TCPAddr string `json:"tcp_addr"`
-	Online  bool   `json:"online"`
-	*ExtraSummary
-}
-
-// provides extra summary of single visor.
-func (hv *Hypervisor) getVisorSummary() http.HandlerFunc {
-	return hv.withCtx(hv.visorCtx, func(w http.ResponseWriter, r *http.Request, ctx *httpCtx) {
-		extraSummary, err := ctx.API.ExtraSummary()
-		if err != nil {
-			httputil.WriteJSON(w, r, http.StatusInternalServerError, err)
-			return
-		}
-
-		extraSummary.Dmsg = hv.getDmsgSummary()
-
-		httputil.WriteJSON(w, r, http.StatusOK, extraSummaryResp{
-			TCPAddr:      ctx.Addr.String(),
-			ExtraSummary: extraSummary,
-		})
-	})
 }
 
 // returns app summaries of a given node of pk
@@ -506,6 +575,18 @@ func (hv *Hypervisor) getApps() http.HandlerFunc {
 func (hv *Hypervisor) getApp() http.HandlerFunc {
 	return hv.withCtx(hv.appCtx, func(w http.ResponseWriter, r *http.Request, ctx *httpCtx) {
 		httputil.WriteJSON(w, r, http.StatusOK, ctx.App)
+	})
+}
+
+func (hv *Hypervisor) getAppStats() http.HandlerFunc {
+	return hv.withCtx(hv.appCtx, func(w http.ResponseWriter, r *http.Request, ctx *httpCtx) {
+		stats, err := ctx.API.GetAppStats(ctx.App.Name)
+		if err != nil {
+			httputil.WriteJSON(w, r, http.StatusInternalServerError, err)
+			return
+		}
+
+		httputil.WriteJSON(w, r, http.StatusOK, &stats)
 	})
 }
 
@@ -643,13 +724,13 @@ func (hv *Hypervisor) appLogsSince() http.HandlerFunc {
 
 func (hv *Hypervisor) appConnections() http.HandlerFunc {
 	return hv.withCtx(hv.appCtx, func(w http.ResponseWriter, r *http.Request, ctx *httpCtx) {
-		summary, err := ctx.API.GetAppConnectionsSummary(ctx.App.Name)
+		cSummary, err := ctx.API.GetAppConnectionsSummary(ctx.App.Name)
 		if err != nil {
 			httputil.WriteJSON(w, r, http.StatusInternalServerError, err)
 			return
 		}
 
-		httputil.WriteJSON(w, r, http.StatusOK, &summary)
+		httputil.WriteJSON(w, r, http.StatusOK, &cSummary)
 	})
 }
 
@@ -709,13 +790,13 @@ func (hv *Hypervisor) postTransport() http.HandlerFunc {
 		}
 
 		const timeout = 30 * time.Second
-		summary, err := ctx.API.AddTransport(reqBody.Remote, reqBody.TpType, reqBody.Public, timeout)
+		tSummary, err := ctx.API.AddTransport(reqBody.Remote, reqBody.TpType, reqBody.Public, timeout)
 		if err != nil {
 			httputil.WriteJSON(w, r, http.StatusInternalServerError, err)
 			return
 		}
 
-		httputil.WriteJSON(w, r, http.StatusOK, summary)
+		httputil.WriteJSON(w, r, http.StatusOK, tSummary)
 	})
 }
 
@@ -871,8 +952,8 @@ func (hv *Hypervisor) getRoute() http.HandlerFunc {
 
 func (hv *Hypervisor) putRoute() http.HandlerFunc {
 	return hv.withCtx(hv.routeCtx, func(w http.ResponseWriter, r *http.Request, ctx *httpCtx) {
-		var summary routing.RuleSummary
-		if err := httputil.ReadJSON(r, &summary); err != nil {
+		var rSummary routing.RuleSummary
+		if err := httputil.ReadJSON(r, &rSummary); err != nil {
 			if err != io.EOF {
 				hv.log(r).Warnf("putRoute request: %v", err)
 			}
@@ -882,7 +963,7 @@ func (hv *Hypervisor) putRoute() http.HandlerFunc {
 			return
 		}
 
-		rule, err := summary.ToRule()
+		rule, err := rSummary.ToRule()
 		if err != nil {
 			httputil.WriteJSON(w, r, http.StatusBadRequest, err)
 			return
@@ -1177,7 +1258,7 @@ func (hv *Hypervisor) visorUpdateAvailable() http.HandlerFunc {
 			return
 		}
 
-		summary, err := ctx.API.Summary()
+		overview, err := ctx.API.Overview()
 		if err != nil {
 			httputil.WriteJSON(w, r, http.StatusInternalServerError, err)
 			return
@@ -1190,7 +1271,7 @@ func (hv *Hypervisor) visorUpdateAvailable() http.HandlerFunc {
 			ReleaseURL       string `json:"release_url,omitempty"`
 		}{
 			Available:      version != nil,
-			CurrentVersion: summary.BuildInfo.Version,
+			CurrentVersion: overview.BuildInfo.Version,
 		}
 
 		if version != nil {
@@ -1199,6 +1280,44 @@ func (hv *Hypervisor) visorUpdateAvailable() http.HandlerFunc {
 		}
 
 		httputil.WriteJSON(w, r, http.StatusOK, output)
+	})
+}
+
+func (hv *Hypervisor) getRuntimeLogs() http.HandlerFunc {
+	return hv.withCtx(hv.visorCtx, func(w http.ResponseWriter, r *http.Request, ctx *httpCtx) {
+		logs, err := ctx.API.RuntimeLogs()
+		if err != nil {
+			httputil.WriteJSON(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, err = w.Write([]byte(logs))
+		if err != nil {
+			hv.visor.log.Errorf("Cannot write response: %s", err)
+		}
+	})
+}
+
+func (hv *Hypervisor) postMinHops() http.HandlerFunc {
+	return hv.withCtx(hv.visorCtx, func(w http.ResponseWriter, r *http.Request, ctx *httpCtx) {
+		var reqBody struct {
+			MinHops uint16 `json:"min_hops"`
+		}
+
+		if err := httputil.ReadJSON(r, &reqBody); err != nil {
+			if err != io.EOF {
+				hv.log(r).Warnf("postMinHops request: %v", err)
+			}
+			httputil.WriteJSON(w, r, http.StatusBadRequest, usermanager.ErrMalformedRequest)
+			return
+		}
+
+		if err := ctx.API.SetMinHops(reqBody.MinHops); err != nil {
+			httputil.WriteJSON(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		httputil.WriteJSON(w, r, http.StatusOK, struct{}{})
 	})
 }
 
@@ -1260,9 +1379,12 @@ func (hv *Hypervisor) visorCtx(w http.ResponseWriter, r *http.Request) (*httpCtx
 			Conn: v,
 		}, true
 	}
+	hv.mu.Lock()
+	conn := hv.selfConn
+	hv.mu.Unlock()
 
 	return &httpCtx{
-		Conn: hv.selfConn,
+		Conn: conn,
 	}, true
 }
 
@@ -1388,4 +1510,14 @@ func pkSliceFromQuery(r *http.Request, key string, defaultVal []cipher.PubKey) (
 	}
 
 	return pks, nil
+}
+
+func (hv *Hypervisor) serveDmsg(ctx context.Context, log *logging.Logger) {
+	go func() {
+		if err := hv.ServeRPC(ctx, hv.c.DmsgPort); err != nil {
+			log.WithError(err).Fatal("Failed to serve RPC client over dmsg.")
+		}
+	}()
+	log.WithField("addr", dmsg.Addr{PK: hv.c.PK, Port: hv.c.DmsgPort}).
+		Info("Serving RPC client over dmsg.")
 }

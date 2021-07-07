@@ -14,13 +14,27 @@ var (
 	ErrEdgeIndexNotFound = errors.New("edge index not found")
 )
 
+// Label is a part of transport entry that signifies the origin
+// of this entry
+type Label string
+
+const (
+	// LabelUser signifies a user-created transport entry
+	LabelUser Label = "user"
+	// LabelAutomatic are transports to publically advertised visors
+	LabelAutomatic = "automatic"
+	// LabelSkycoin are transports created by skycoin system to improve network resiliency
+	LabelSkycoin = "skycoin"
+)
+
 // Entry is the unsigned representation of a Transport.
 type Entry struct {
 
 	// ID is the Transport ID that uniquely identifies the Transport.
 	ID uuid.UUID `json:"t_id"`
 
-	// Edges contains the public keys of the Transport's edge nodes (should only have 2 edges and the least-significant edge should come first).
+	// Edges contains the public keys of the Transport's edge nodes
+	// (should only have 2 edges and the first edge is transport original initiator).
 	Edges [2]cipher.PubKey `json:"edges"`
 
 	// Type represents the transport type.
@@ -29,22 +43,21 @@ type Entry struct {
 	// Public determines whether the transport is to be exposed to other nodes or not.
 	// Public transports are to be registered in the Transport Discovery.
 	Public bool `json:"public"` // TODO(evanlinjin): remove this.
+
+	Label Label `json:"label"`
 }
 
-// NewEntry constructs *Entry
-func NewEntry(localPK, remotePK cipher.PubKey, tpType string, public bool) *Entry {
-	return &Entry{
-		ID:     MakeTransportID(localPK, remotePK, tpType),
-		Edges:  SortEdges(localPK, remotePK),
+// MakeEntry creates a new transport entry
+func MakeEntry(initiator, target cipher.PubKey, tpType string, public bool, label Label) Entry {
+	entry := Entry{
+		ID:     MakeTransportID(initiator, target, tpType),
 		Type:   tpType,
 		Public: public,
+		Label:  label,
 	}
-}
-
-// SetEdges sets edges of Entry
-func (e *Entry) SetEdges(localPK, remotePK cipher.PubKey) {
-	e.ID = MakeTransportID(localPK, remotePK, e.Type)
-	e.Edges = SortEdges(localPK, remotePK)
+	entry.Edges[0] = initiator
+	entry.Edges[1] = target
+	return entry
 }
 
 // RemoteEdge returns the remote edge's public key.
@@ -90,8 +103,8 @@ func (e *Entry) String() string {
 	res += fmt.Sprintf("\ttype: %s\n", e.Type)
 	res += fmt.Sprintf("\tid: %s\n", e.ID)
 	res += "\tedges:\n"
-	res += fmt.Sprintf("\t\tedge 1: %s\n", e.Edges[0])
-	res += fmt.Sprintf("\t\tedge 2: %s\n", e.Edges[1])
+	res += fmt.Sprintf("\t\tedge 1 (initiator): %s\n", e.Edges[0])
+	res += fmt.Sprintf("\t\tedge 2 (target): %s\n", e.Edges[1])
 	return res
 }
 
@@ -166,9 +179,6 @@ type Status struct {
 	// IsUp represents whether the Transport is up.
 	// A Transport that is down will fail to forward Packets.
 	IsUp bool `json:"is_up"`
-
-	// Updated is the epoch timestamp of when the status is last updated.
-	Updated int64 `json:"updated,omitempty"`
 }
 
 // EntryWithStatus stores Entry and Statuses returned by both Edges.
@@ -176,6 +186,7 @@ type EntryWithStatus struct {
 	Entry      *Entry  `json:"entry"`
 	IsUp       bool    `json:"is_up"`
 	Registered int64   `json:"registered"`
+	Updated    int64   `json:"updated"`
 	Statuses   [2]bool `json:"statuses"`
 }
 

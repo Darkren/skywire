@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/skycoin/dmsg/disc"
 	"github.com/skycoin/skycoin/src/util/logging"
 
-	"github.com/skycoin/skywire/pkg/app/appdisc"
 	"github.com/skycoin/skywire/pkg/app/appevent"
 	"github.com/skycoin/skywire/pkg/snet/arclient"
 	"github.com/skycoin/skywire/pkg/snet/directtp"
@@ -75,8 +73,6 @@ type Config struct {
 	SecKey         cipher.SecKey
 	ARClient       arclient.APIClient
 	NetworkConfigs NetworkConfigs
-	ServiceDisc    appdisc.Factory
-	PublicTrusted  bool
 }
 
 // NetworkConfigs represents all network configs.
@@ -93,18 +89,17 @@ type NetworkClients struct {
 
 // Network represents a network between nodes in Skywire.
 type Network struct {
-	conf         Config
-	netsMu       sync.RWMutex
-	nets         map[string]struct{} // networks to be used with transports
-	clients      NetworkClients
-	visorUpdater appdisc.Updater
+	conf    Config
+	netsMu  sync.RWMutex
+	nets    map[string]struct{} // networks to be used with transports
+	clients NetworkClients
 
 	onNewNetworkTypeMu sync.Mutex
 	onNewNetworkType   func(netType string)
 }
 
 // New creates a network from a config.
-func New(conf Config, eb *appevent.Broadcaster) (*Network, error) {
+func New(conf Config, eb *appevent.Broadcaster, masterLogger *logging.MasterLogger) (*Network, error) {
 	clients := NetworkClients{
 		Direct: make(map[string]directtp.Client),
 	}
@@ -128,7 +123,7 @@ func New(conf Config, eb *appevent.Broadcaster) (*Network, error) {
 			},
 		}
 		clients.DmsgC = dmsg.NewClient(conf.PubKey, conf.SecKey, disc.NewHTTP(conf.NetworkConfigs.Dmsg.Discovery), dmsgConf)
-		clients.DmsgC.SetLogger(logging.MustGetLogger("snet.dmsgC"))
+		clients.DmsgC.SetLogger(masterLogger.PackageLogger("snet.dmsgC"))
 	}
 
 	if conf.NetworkConfigs.STCP != nil {
@@ -145,7 +140,7 @@ func New(conf Config, eb *appevent.Broadcaster) (*Network, error) {
 				return nil
 			},
 		}
-		clients.Direct[tptypes.STCP] = directtp.NewClient(conf)
+		clients.Direct[tptypes.STCP] = directtp.NewClient(conf, masterLogger)
 	}
 
 	if conf.ARClient != nil {
@@ -162,7 +157,7 @@ func New(conf Config, eb *appevent.Broadcaster) (*Network, error) {
 			},
 		}
 
-		clients.Direct[tptypes.STCPR] = directtp.NewClient(stcprConf)
+		clients.Direct[tptypes.STCPR] = directtp.NewClient(stcprConf, masterLogger)
 
 		sudphConf := directtp.Config{
 			Type:            tptypes.SUDPH,
@@ -171,7 +166,7 @@ func New(conf Config, eb *appevent.Broadcaster) (*Network, error) {
 			AddressResolver: conf.ARClient,
 		}
 
-		clients.Direct[tptypes.SUDPH] = directtp.NewClient(sudphConf)
+		clients.Direct[tptypes.SUDPH] = directtp.NewClient(sudphConf, masterLogger)
 	}
 
 	return NewRaw(conf, clients), nil
@@ -226,10 +221,6 @@ func (n *Network) Init() error {
 			if err := client.Serve(); err != nil {
 				return fmt.Errorf("failed to initiate 'stcpr': %w", err)
 			}
-
-			if n.conf.PublicTrusted {
-				go n.registerPublicTrusted(client)
-			}
 		} else {
 			log.Infof("No config found for stcpr")
 		}
@@ -244,33 +235,6 @@ func (n *Network) Init() error {
 	}
 
 	return nil
-}
-
-func (n *Network) registerPublicTrusted(client directtp.Client) {
-	log.Infof("Trying to register visor as public trusted")
-
-	la, err := client.LocalAddr()
-	if err != nil {
-		log.WithError(err).Errorf("Failed to get STCPR local addr")
-		return
-	}
-
-	_, portStr, err := net.SplitHostPort(la.String())
-	if err != nil {
-		log.WithError(err).Errorf("Failed to extract port from addr %v", la.String())
-		return
-	}
-
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		log.WithError(err).Errorf("Failed to convert port to int")
-		return
-	}
-
-	n.visorUpdater = n.conf.ServiceDisc.VisorUpdater(uint16(port))
-	n.visorUpdater.Start()
-
-	log.Infof("Sent request to register visor as public trusted")
 }
 
 // OnNewNetworkType sets callback to be called when new network type is ready.
@@ -293,10 +257,6 @@ func (n *Network) Close() error {
 	n.netsMu.Lock()
 	defer n.netsMu.Unlock()
 
-	if n.visorUpdater != nil {
-		n.visorUpdater.Stop()
-	}
-
 	wg := new(sync.WaitGroup)
 
 	var dmsgErr error
@@ -308,31 +268,29 @@ func (n *Network) Close() error {
 		}()
 	}
 
-	var directErrorsMu sync.Mutex
-	directErrors := make(map[string]error)
+	directErrors := make(chan error)
 
-	for k, v := range n.clients.Direct {
-		if v != nil {
-			wg.Add(1)
-			go func() {
-				err := v.Close()
-
-				directErrorsMu.Lock()
-				directErrors[k] = err
-				directErrorsMu.Unlock()
-
-				wg.Done()
-			}()
+	for _, directClient := range n.clients.Direct {
+		if directClient == nil {
+			continue
 		}
+		wg.Add(1)
+		go func(client directtp.Client) {
+			err := client.Close()
+			if err != nil {
+				directErrors <- err
+			}
+			wg.Done()
+		}(directClient)
 	}
-
 	wg.Wait()
+	close(directErrors)
 
 	if dmsgErr != nil {
 		return dmsgErr
 	}
 
-	for _, err := range directErrors {
+	for err := range directErrors {
 		if err != nil {
 			return err
 		}
@@ -363,18 +321,23 @@ func (n *Network) TransportNetworks() []string {
 func (n *Network) Dmsg() *dmsg.Client { return n.clients.DmsgC }
 
 // STcp returns the underlying stcp.Client.
-func (n *Network) STcp() directtp.Client {
-	return n.clients.Direct[tptypes.STCP]
+func (n *Network) STcp() (directtp.Client, bool) {
+	return n.getClient(tptypes.STCP)
 }
 
 // STcpr returns the underlying stcpr.Client.
-func (n *Network) STcpr() directtp.Client {
-	return n.clients.Direct[tptypes.STCPR]
+func (n *Network) STcpr() (directtp.Client, bool) {
+	return n.getClient(tptypes.STCPR)
 }
 
 // SUdpH returns the underlying sudph.Client.
-func (n *Network) SUdpH() directtp.Client {
-	return n.clients.Direct[tptypes.SUDPH]
+func (n *Network) SUdpH() (directtp.Client, bool) {
+	return n.getClient(tptypes.SUDPH)
+}
+
+func (n *Network) getClient(tpType string) (directtp.Client, bool) {
+	c, ok := n.clients.Direct[tpType]
+	return c, ok
 }
 
 // Dial dials a visor by its public key and returns a connection.

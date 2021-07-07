@@ -39,7 +39,7 @@ const (
 
 	minHops       = 0
 	maxHops       = 50
-	retryDuration = 10 * time.Second
+	retryDuration = 2 * time.Second
 	retryInterval = 500 * time.Millisecond
 )
 
@@ -61,6 +61,8 @@ type Config struct {
 	RouteGroupDialer setupclient.RouteGroupDialer
 	SetupNodes       []cipher.PubKey
 	RulesGCInterval  time.Duration
+	MinHops          uint16
+	MaxHops          uint16
 }
 
 // SetDefaults sets default values for certain empty values.
@@ -75,6 +77,10 @@ func (c *Config) SetDefaults() {
 
 	if c.RulesGCInterval <= 0 {
 		c.RulesGCInterval = DefaultRulesGCInterval
+	}
+
+	if c.MaxHops == 0 {
+		c.MaxHops = maxHops
 	}
 }
 
@@ -149,7 +155,6 @@ type router struct {
 	rpcSrv        *rpc.Server
 	accept        chan routing.EdgeRules
 	done          chan struct{}
-	wg            sync.WaitGroup
 	once          sync.Once
 }
 
@@ -312,12 +317,7 @@ func (r *router) Serve(ctx context.Context) error {
 
 	go r.serveTransportManager(ctx)
 
-	r.wg.Add(1)
-
-	go func() {
-		defer r.wg.Done()
-		r.serveSetup()
-	}()
+	go r.serveSetup()
 
 	r.tm.Serve(ctx)
 
@@ -739,8 +739,6 @@ func (r *router) Close() error {
 		r.logger.WithError(err).Warnf("closing route_manager returned error")
 	}
 
-	r.wg.Wait()
-
 	return r.tm.Close()
 }
 
@@ -827,7 +825,7 @@ fetchRoutesAgain:
 	ctx := context.Background()
 
 	paths, err := r.conf.RouteFinder.FindRoutes(ctx, []routing.PathEdges{forward, backward},
-		&rfclient.RouteOptions{MinHops: minHops, MaxHops: maxHops})
+		&rfclient.RouteOptions{MinHops: r.conf.MinHops, MaxHops: r.conf.MaxHops})
 
 	if err == rfclient.ErrTransportNotFound {
 		return nil, nil, err

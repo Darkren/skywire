@@ -92,17 +92,17 @@ func (rc *rpcClient) Call(method string, args, reply interface{}) error {
 	}
 }
 
-// ExtraSummary calls ExtraSummary.
-func (rc *rpcClient) ExtraSummary() (*ExtraSummary, error) {
-	out := new(ExtraSummary)
-	err := rc.Call("ExtraSummary", &struct{}{}, out)
-	return out, err
-}
-
 // Summary calls Summary.
 func (rc *rpcClient) Summary() (*Summary, error) {
 	out := new(Summary)
 	err := rc.Call("Summary", &struct{}{}, out)
+	return out, err
+}
+
+// Overview calls Overview.
+func (rc *rpcClient) Overview() (*Overview, error) {
+	out := new(Overview)
+	err := rc.Call("Overview", &struct{}{}, out)
 	return out, err
 }
 
@@ -203,6 +203,16 @@ func (rc *rpcClient) LogsSince(timestamp time.Time, appName string) ([]string, e
 	}
 
 	return res, nil
+}
+
+func (rc *rpcClient) GetAppStats(appName string) (appserver.AppStats, error) {
+	var stats appserver.AppStats
+
+	if err := rc.Call("GetAppStats", &appName, &stats); err != nil {
+		return appserver.AppStats{}, err
+	}
+
+	return stats, nil
 }
 
 // GetAppConnectionsSummary get connections stats for the app.
@@ -321,6 +331,19 @@ func (rc *rpcClient) Update(config updater.UpdateConfig) (bool, error) {
 	return updated, err
 }
 
+// RuntimeLogs calls RuntimeLogs.
+func (rc *rpcClient) RuntimeLogs() (string, error) {
+	var logs string
+	err := rc.Call("RuntimeLogs", &struct{}{}, &logs)
+	return logs, err
+}
+
+// SetMinHops sets the min_hops from visor routing config
+func (rc *rpcClient) SetMinHops(hops uint16) error {
+	err := rc.Call("SetMinHops", &hops, &struct{}{})
+	return err
+}
+
 // StatusMessage defines a status of visor update.
 type StatusMessage struct {
 	Text    string
@@ -407,7 +430,7 @@ func (rc *rpcClient) UpdateAvailable(channel updater.Channel) (*updater.Version,
 	return &version, err
 }
 
-// UpdateAvailable calls UpdateAvailable.
+// UpdateStatus calls UpdateStatus
 func (rc *rpcClient) UpdateStatus() (string, error) {
 	var result string
 	err := rc.Call("UpdateStatus", &struct{}{}, &result)
@@ -421,7 +444,7 @@ func (rc *rpcClient) UpdateStatus() (string, error) {
 // MockRPCClient mocks API.
 type mockRPCClient struct {
 	startedAt time.Time
-	s         *Summary
+	o         *Overview
 	tpTypes   []string
 	rt        routing.Table
 	logS      appcommon.LogStore
@@ -497,7 +520,7 @@ func NewMockRPCClient(r *rand.Rand, maxTps int, maxRules int) (cipher.PubKey, AP
 	log.Printf("rtCount: %d", rt.Count())
 
 	client := &mockRPCClient{
-		s: &Summary{
+		o: &Overview{
 			PubKey:          localPK,
 			BuildInfo:       buildinfo.Get(),
 			AppProtoVersion: supportedProtocolVersion,
@@ -527,28 +550,28 @@ func (mc *mockRPCClient) do(write bool, f func() error) error {
 	return f()
 }
 
-// Summary implements API.
-func (mc *mockRPCClient) Summary() (*Summary, error) {
-	var out Summary
+// Overview implements API.
+func (mc *mockRPCClient) Overview() (*Overview, error) {
+	var out Overview
 	err := mc.do(false, func() error {
-		out = *mc.s
-		for _, a := range mc.s.Apps {
+		out = *mc.o
+		for _, a := range mc.o.Apps {
 			a := a
 			out.Apps = append(out.Apps, a)
 		}
-		for _, tp := range mc.s.Transports {
+		for _, tp := range mc.o.Transports {
 			tp := tp
 			out.Transports = append(out.Transports, tp)
 		}
-		out.RoutesCount = mc.s.RoutesCount
+		out.RoutesCount = mc.o.RoutesCount
 		return nil
 	})
 	return &out, err
 }
 
-// ExtraSummary implements API.
-func (mc *mockRPCClient) ExtraSummary() (*ExtraSummary, error) {
-	summary, err := mc.Summary()
+// Summary implements API.
+func (mc *mockRPCClient) Summary() (*Summary, error) {
+	overview, err := mc.Overview()
 	if err != nil {
 		return nil, err
 	}
@@ -577,14 +600,14 @@ func (mc *mockRPCClient) ExtraSummary() (*ExtraSummary, error) {
 		})
 	}
 
-	extraSummary := &ExtraSummary{
-		Summary: summary,
-		Health:  health,
-		Uptime:  uptime,
-		Routes:  extraRoutes,
+	summary := &Summary{
+		Overview: overview,
+		Health:   health,
+		Uptime:   uptime,
+		Routes:   extraRoutes,
 	}
 
-	return extraSummary, nil
+	return summary, nil
 }
 
 // Health implements API
@@ -609,7 +632,7 @@ func (mc *mockRPCClient) Uptime() (float64, error) {
 func (mc *mockRPCClient) Apps() ([]*launcher.AppState, error) {
 	var apps []*launcher.AppState
 	err := mc.do(false, func() error {
-		for _, a := range mc.s.Apps {
+		for _, a := range mc.o.Apps {
 			a := a
 			apps = append(apps, a)
 		}
@@ -631,7 +654,7 @@ func (*mockRPCClient) StopApp(string) error {
 // SetAppDetailedStatus sets app's detailed state.
 func (mc *mockRPCClient) SetAppDetailedStatus(appName, status string) error {
 	return mc.do(true, func() error {
-		for _, a := range mc.s.Apps {
+		for _, a := range mc.o.Apps {
 			if a.Name == appName {
 				a.DetailedStatus = status
 				return nil
@@ -650,7 +673,7 @@ func (*mockRPCClient) RestartApp(string) error {
 // SetAutoStart implements API.
 func (mc *mockRPCClient) SetAutoStart(appName string, autostart bool) error {
 	return mc.do(true, func() error {
-		for _, a := range mc.s.Apps {
+		for _, a := range mc.o.Apps {
 			if a.Name == appName {
 				a.AutoStart = autostart
 				return nil
@@ -665,8 +688,8 @@ func (mc *mockRPCClient) SetAppPassword(string, string) error {
 	return mc.do(true, func() error {
 		const socksName = "skysocks"
 
-		for i := range mc.s.Apps {
-			if mc.s.Apps[i].Name == socksName {
+		for i := range mc.o.Apps {
+			if mc.o.Apps[i].Name == socksName {
 				return nil
 			}
 		}
@@ -680,8 +703,8 @@ func (mc *mockRPCClient) SetAppPK(string, cipher.PubKey) error {
 	return mc.do(true, func() error {
 		const socksName = "skysocks-client"
 
-		for i := range mc.s.Apps {
-			if mc.s.Apps[i].Name == socksName {
+		for i := range mc.o.Apps {
+			if mc.o.Apps[i].Name == socksName {
 				return nil
 			}
 		}
@@ -695,8 +718,8 @@ func (mc *mockRPCClient) SetAppKillswitch(appName string, killswitch bool) error
 	return mc.do(true, func() error {
 		const socksName = "skysocks"
 
-		for i := range mc.s.Apps {
-			if mc.s.Apps[i].Name == socksName {
+		for i := range mc.o.Apps {
+			if mc.o.Apps[i].Name == socksName {
 				return nil
 			}
 		}
@@ -710,8 +733,8 @@ func (mc *mockRPCClient) SetAppSecure(appName string, isSecure bool) error {
 	return mc.do(true, func() error {
 		const socksName = "skysocks"
 
-		for i := range mc.s.Apps {
-			if mc.s.Apps[i].Name == socksName {
+		for i := range mc.o.Apps {
+			if mc.o.Apps[i].Name == socksName {
 				return nil
 			}
 		}
@@ -725,8 +748,12 @@ func (mc *mockRPCClient) LogsSince(timestamp time.Time, _ string) ([]string, err
 	return mc.logS.LogsSince(timestamp)
 }
 
+func (mc *mockRPCClient) GetAppStats(_ string) (appserver.AppStats, error) {
+	return appserver.AppStats{}, nil
+}
+
 // GetAppConnectionsSummary get connections stats for the app.
-func (mc *mockRPCClient) GetAppConnectionsSummary(appName string) ([]appserver.ConnectionSummary, error) {
+func (mc *mockRPCClient) GetAppConnectionsSummary(_ string) ([]appserver.ConnectionSummary, error) {
 	return nil, nil
 }
 
@@ -739,7 +766,7 @@ func (mc *mockRPCClient) TransportTypes() ([]string, error) {
 func (mc *mockRPCClient) Transports(types []string, pks []cipher.PubKey, logs bool) ([]*TransportSummary, error) {
 	var summaries []*TransportSummary
 	err := mc.do(false, func() error {
-		for _, tp := range mc.s.Transports {
+		for _, tp := range mc.o.Transports {
 			tp := tp
 			if types != nil {
 				for _, reqT := range types {
@@ -776,7 +803,7 @@ func (mc *mockRPCClient) Transports(types []string, pks []cipher.PubKey, logs bo
 func (mc *mockRPCClient) Transport(tid uuid.UUID) (*TransportSummary, error) {
 	var summary TransportSummary
 	err := mc.do(false, func() error {
-		for _, tp := range mc.s.Transports {
+		for _, tp := range mc.o.Transports {
 			if tp.ID == tid {
 				summary = *tp
 				return nil
@@ -790,14 +817,14 @@ func (mc *mockRPCClient) Transport(tid uuid.UUID) (*TransportSummary, error) {
 // AddTransport implements API.
 func (mc *mockRPCClient) AddTransport(remote cipher.PubKey, tpType string, _ bool, _ time.Duration) (*TransportSummary, error) {
 	summary := &TransportSummary{
-		ID:     transport.MakeTransportID(mc.s.PubKey, remote, tpType),
-		Local:  mc.s.PubKey,
+		ID:     transport.MakeTransportID(mc.o.PubKey, remote, tpType),
+		Local:  mc.o.PubKey,
 		Remote: remote,
 		Type:   tpType,
 		Log:    new(transport.LogEntry),
 	}
 	return summary, mc.do(true, func() error {
-		mc.s.Transports = append(mc.s.Transports, summary)
+		mc.o.Transports = append(mc.o.Transports, summary)
 		return nil
 	})
 }
@@ -805,9 +832,9 @@ func (mc *mockRPCClient) AddTransport(remote cipher.PubKey, tpType string, _ boo
 // RemoveTransport implements API.
 func (mc *mockRPCClient) RemoveTransport(tid uuid.UUID) error {
 	return mc.do(true, func() error {
-		for i, tp := range mc.s.Transports {
+		for i, tp := range mc.o.Transports {
 			if tp.ID == tid {
-				mc.s.Transports = append(mc.s.Transports[:i], mc.s.Transports[i+1:]...)
+				mc.o.Transports = append(mc.o.Transports[:i], mc.o.Transports[i+1:]...)
 				return nil
 			}
 		}
@@ -896,4 +923,14 @@ func (mc *mockRPCClient) UpdateAvailable(_ updater.Channel) (*updater.Version, e
 // UpdateStatus implements API.
 func (mc *mockRPCClient) UpdateStatus() (string, error) {
 	return "", nil
+}
+
+// RuntimeLogs implements API.
+func (mc *mockRPCClient) RuntimeLogs() (string, error) {
+	return "", nil
+}
+
+// SetMinHops implements API
+func (mc *mockRPCClient) SetMinHops(n uint16) error {
+	return nil
 }
